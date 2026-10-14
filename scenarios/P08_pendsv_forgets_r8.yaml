@@ -1,0 +1,59 @@
+id: P08
+title: Context switch bug - PendSV forgets to save and restore r8
+layer: "5 Kernel"
+description: >
+  The PendSV handler's register list is {r4-r7, r9-r11} instead of {r4-r11}.
+  Nothing faults. Task A keeps a value in r8, stores what it expects, runs a
+  delay loop (so a tick lands inside it), and compares r8 afterwards. Task B
+  also uses r8 for its own counter. After the first switch A -> B -> A, task A
+  finds B's r8 in its register and records a corruption. The scenario shows
+  how a missing register in the software frame surfaces as data corruption
+  far from the handler.
+program: kernel
+options:
+  tick_cycles: 2000
+  task_work: 150
+  stop_after_ticks: 30
+  task_set: r8_check
+faults:
+  - {type: pendsv_forgets_register, register: r8}
+config:
+  seed: 1
+  max_cycles: 200000
+expected:
+  summary: No faults, tasks keep switching, but task A reports r8 corruptions (marker events) and the "corruptions" global is non-zero.
+  checks:
+    - {check: no_faults}
+    - {check: min_switches, count: 30}
+    - {check: global_gt, name: corruptions, value: 0}
+    - {check: min_events, kind: marker, count: 1}
+    - {check: event_sequence, kinds: ["context_switch:B", "context_switch:A", "marker"]}
+what_to_look_for: >
+  The scenario event lists the injected fault. The kernel's PendSV source in
+  this run uses stmdb/ldmia with a seven-register list; the context_switch
+  events look normal (PSPs change, nothing faults). Then, soon after the
+  first switch back to A, a marker event "taskA: r8 corrupted after a context
+  switch". The global "corruptions" counts how often it happened; a_iters is
+  reset each time. Compare with P06 where the same task set with a complete
+  register list never reports a corruption. In the viewer, click the
+  context_switch events: the saved frame on A's stack has only seven words
+  before the hardware frame, so the PSP in the TCB is off by four relative to
+  the correct layout.
+likely_root_causes:
+  - "A register missing from the stmdb/ldmia list in the PendSV handler (classic: r8 or r11, because the list was typed as r4-r7, r9-r11 or copied from an example that used a different set)."
+  - "The compiler uses a register the switch does not save (a kernel written in C with a naked handler and the wrong clobber list)."
+  - "Saving with one register order and restoring with another, so the values go back into the wrong registers."
+  - "FPU context: if the FPU is enabled, s16-s31 also need saving (lazy stacking)."
+how_to_debug:
+  - "Write a GDB script that breaks in PendSV, prints the PSP and 16 words above it, and compares to the stack-layout diagram; count the words before the hardware frame (must be 8)."
+  - "In each task, keep a known constant in r8-r11 (register variables) and check it after every delay; the first task to see a wrong value points at the register."
+  - "Review the handler's register list against the ABI table: r4-r11 are callee-saved and must be in the software frame, r0-r3/r12/lr/pc/xPSR are already in the hardware frame."
+  - "Run two tasks with different values in the suspect register and dump both TCB frames: the missing word shifts everything below it."
+what_this_means: >
+  A context switch must preserve every register the ABI calls callee-saved,
+  because the task was interrupted at an arbitrary instruction and expects
+  all of them intact. Missing one does not fault; it leaks one task's value
+  into another, intermittently, only when a tick happens while the register
+  is live. That is why the course asks for a stack-layout diagram before any
+  switch code is written.
+hidden_symptom: "Tasks run, but one of them occasionally computes garbage or resets its counter; nothing in the fault log."

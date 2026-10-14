@@ -1,0 +1,47 @@
+id: P01
+title: Clean boot from reset to blink and UART
+layer: "2 Boot"
+description: >
+  The reference run. Power-on, the core reads the vector table (initial MSP and
+  Reset_Handler), the startup code copies .data from flash to SRAM and zeroes
+  .bss, then calls main. main prints "boot ok" over the UART, blinks the LED
+  three times, increments a .bss counter and prints a .data value. Every boot
+  step is a trace event, so this run is the baseline every other boot scenario
+  is compared against.
+program: blink
+options: {}
+config:
+  seed: 1
+  max_cycles: 50000
+expected:
+  summary: All six boot steps pass, "boot ok", "counter=1" and "greeting_len=7" are printed, no faults, halt at the end of main.
+  checks:
+    - {check: boot_complete}
+    - {check: no_faults}
+    - {check: uart_contains, text: "boot ok"}
+    - {check: uart_contains, text: "counter=1"}
+    - {check: uart_contains, text: "greeting_len=7"}
+    - {check: min_events, kind: gpio, count: 6}
+    - {check: event_sequence, kinds: ["boot_step:power_on", "boot_step:vector_table", "boot_step:reset_handler", "boot_step:data_copied", "boot_step:bss_zeroed", "boot_step:main_entered", "uart_tx", "gpio", "halt"]}
+what_to_look_for: >
+  The first six events are boot steps in the order power_on, vector_table,
+  reset_handler, data_copied, bss_zeroed, main_entered. The vector_table event
+  shows the two words the core read: MSP=0x20082000 (top of SRAM) and the
+  Reset_Handler address in flash. The data_copied and bss_zeroed events report
+  how many words were handled and that the check passed. main_entered gives the
+  cycle count from reset to main, the number a student measures with the DWT
+  counter on the board. After that: one UART line, six LED edges, two more
+  UART lines, and a halt event.
+likely_root_causes:
+  - "This is the healthy baseline: nothing is wrong. If your board does not show this sequence, compare its first divergence against the P02/P03 traces."
+how_to_debug:
+  - "On the board: set a hardware breakpoint at Reset_Handler, reset, and single-step; watch SP and PC in the registers view."
+  - "In GDB: 'monitor reset halt' stops in the RP2350 boot ROM; 'hbreak Reset_Handler' and 'continue', then 'x/2xw 0x10000000': SP must equal word 0 and PC word 1 with bit 0 cleared, because the boot ROM loads them from your table."
+  - "Count cycles from reset to main with DWT CYCCNT (enable TRCENA in DEMCR first) and compare with the main_entered event."
+what_this_means: >
+  Between power-on and main() the processor does only three things on its own:
+  load MSP, load PC from the reset vector and start executing. Everything else
+  (copying .data, zeroing .bss, calling main) is code the student wrote. The
+  trace makes that split visible: the first two events are hardware, the rest
+  is startup code.
+hidden_symptom: "LED blinks and the terminal shows three lines."

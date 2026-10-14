@@ -1,0 +1,290 @@
+{
+  "project": "reset-to-scheduler-sim",
+  "version": "1.0.0",
+  "scenarios": [
+    {
+      "id": "P01",
+      "title": "Clean boot from reset to blink and UART",
+      "layer": "2 Boot",
+      "file": "P01.json",
+      "program": "blink",
+      "passed": true,
+      "events": 17,
+      "variants": [],
+      "faults": [],
+      "hidden_symptom": "LED blinks and the terminal shows three lines.",
+      "expected": "All six boot steps pass, \"boot ok\", \"counter=1\" and \"greeting_len=7\" are printed, no faults, halt at the end of main."
+    },
+    {
+      "id": "P02",
+      "title": "Boot fault - startup code forgets to zero .bss",
+      "layer": "2 Boot",
+      "file": "P02.json",
+      "program": "blink",
+      "passed": true,
+      "events": 17,
+      "variants": [],
+      "faults": [
+        "missing_bss_zero"
+      ],
+      "hidden_symptom": "LED blinks, 'boot ok' prints, but 'counter=' shows a huge number instead of 1 and it changes between power cycles.",
+      "expected": "Boot reaches main without faults, but the bss_zeroed step reports garbage and \"counter=\" is not 1."
+    },
+    {
+      "id": "P03",
+      "title": "Boot fault - wrong initial stack pointer in the vector table",
+      "layer": "2 Boot",
+      "file": "P03.json",
+      "program": "blink",
+      "passed": true,
+      "events": 11,
+      "variants": [],
+      "faults": [
+        "wrong_initial_sp"
+      ],
+      "hidden_symptom": "Board prints 'boot ok' then hangs; the debugger shows the core in lockup with HFSR.FORCED set.",
+      "expected": "Boot steps up to main_entered pass (vector_table flagged); the first push is a BusFault escalated to HardFault, its entry fails with STKERR, and the core locks up."
+    },
+    {
+      "id": "P04",
+      "title": "Interrupt latency - button IRQ with a GPIO marker, light vs heavy load",
+      "layer": "4 Exceptions",
+      "file": "P04.json",
+      "program": "latency",
+      "passed": true,
+      "events": 324,
+      "variants": [
+        "light",
+        "heavy"
+      ],
+      "faults": [],
+      "hidden_symptom": "Button response is usually instant but sometimes visibly late; the latency histogram has a long tail.",
+      "expected": "Light load gives a tight histogram near the 12-cycle entry cost; heavy load spreads it up to the critical-section length with much larger jitter."
+    },
+    {
+      "id": "P05",
+      "title": "Two interrupts - priority inversion vs fixed priorities, tail-chaining",
+      "layer": "4 Exceptions",
+      "file": "P05.json",
+      "program": "priority",
+      "passed": true,
+      "events": 42,
+      "variants": [
+        "inversion",
+        "fixed"
+      ],
+      "faults": [],
+      "hidden_symptom": "Button response time depends on whether the timer handler happens to be running.",
+      "expected": "With equal priorities the button waits ~500 cycles and is tail-chained after the timer; with a higher priority it is taken in ~12 cycles by pre-empting the timer handler."
+    },
+    {
+      "id": "P06",
+      "title": "Three-task round-robin kernel on the SysTick",
+      "layer": "5 Kernel",
+      "file": "P06.json",
+      "program": "kernel",
+      "passed": true,
+      "events": 635,
+      "variants": [],
+      "faults": [],
+      "hidden_symptom": "LED blinks, alphabet scrolls, counter increments; three things happen at once on one core.",
+      "expected": "30 ticks, 40+ context switches, all tasks alive, the alphabet appears on the UART, the LED toggles, stack watermarks around 25 percent, no faults."
+    },
+    {
+      "id": "P07",
+      "title": "Misbehaving task hits the MPU stack guard - kernel kills it, others continue",
+      "layer": "5 Kernel",
+      "file": "P07.json",
+      "program": "kernel",
+      "passed": true,
+      "events": 556,
+      "variants": [],
+      "faults": [
+        "task_overflows_stack"
+      ],
+      "hidden_symptom": "One of the three tasks stops; the other two keep going; the fault log shows a MemManage with an address just below a stack.",
+      "expected": "One MemManage fault with MMARVALID pointing into guard_C; task C is DEAD with a 100 percent watermark; A and B keep running; no lockup."
+    },
+    {
+      "id": "P08",
+      "title": "Context switch bug - PendSV forgets to save and restore r8",
+      "layer": "5 Kernel",
+      "file": "P08.json",
+      "program": "kernel",
+      "passed": true,
+      "events": 589,
+      "variants": [],
+      "faults": [
+        "pendsv_forgets_register"
+      ],
+      "hidden_symptom": "Tasks run, but one of them occasionally computes garbage or resets its counter; nothing in the fault log.",
+      "expected": "No faults, tasks keep switching, but task A reports r8 corruptions (marker events) and the \"corruptions\" global is non-zero."
+    },
+    {
+      "id": "P09",
+      "title": "Stack overflow without the MPU - watermark hits 100 percent, then corruption",
+      "layer": "5 Kernel",
+      "file": "P09.json",
+      "program": "kernel",
+      "passed": true,
+      "events": 363,
+      "variants": [],
+      "faults": [
+        "no_mpu",
+        "task_overflows_stack"
+      ],
+      "hidden_symptom": "Random tasks crash with UsageFault or BusFault at nonsense addresses; which one crashes changes with timing.",
+      "expected": "No MemManage; instead a late BusFault/UsageFault chain, more than one task dead, C's watermark 100 percent and corrupted globals."
+    },
+    {
+      "id": "P10",
+      "title": "Flash vs SRAM - the same loop timed with the cycle counter, with and without the XIP cache",
+      "layer": "Experiments",
+      "file": "P10.json",
+      "program": "bench",
+      "passed": true,
+      "events": 30,
+      "variants": [
+        "flash_cached",
+        "flash_uncached",
+        "sram"
+      ],
+      "faults": [],
+      "hidden_symptom": "The same function runs faster when moved to RAM, but only a little, unless the cache is off.",
+      "expected": "sram is fastest, flash_cached is within a few percent of it (only cold misses), flash_uncached is several times slower; the instruction count is identical in all three."
+    },
+    {
+      "id": "P11",
+      "title": "ISA comparison - the same benchmark under the arm_like and riscv_like cost profiles",
+      "layer": "1 ISA",
+      "file": "P11.json",
+      "program": "bench",
+      "passed": true,
+      "events": 20,
+      "variants": [
+        "arm_like",
+        "riscv_like"
+      ],
+      "faults": [],
+      "hidden_symptom": "The RISC-V build is larger and retires fewer instructions for the same C code.",
+      "expected": "Both profiles execute the same program; they differ in instret (riscv_like retires fewer because it has compare-and-branch instructions, but more for push/pop), in cycles and CPI, and in static code size (arm_like denser)."
+    },
+    {
+      "id": "P12",
+      "title": "SVC system call path - privilege round trip, an ignored cpsid and a forbidden SysTick write",
+      "layer": "5 Kernel",
+      "file": "P12.json",
+      "program": "kernel",
+      "passed": true,
+      "events": 560,
+      "variants": [],
+      "faults": [
+        "task_privileged_op"
+      ],
+      "hidden_symptom": "A task that tries to disable interrupts has no effect at all; the same task dies with a BusFault when it touches SysTick.",
+      "expected": "Several svc write calls succeed with a privilege round trip each; cpsid in task C is ignored; the SysTick write is a precise BusFault (BFAR=0xE000E010); C is DEAD, A and B keep running, no lockup."
+    },
+    {
+      "id": "P13",
+      "title": "Boot fault - startup code forgets to copy .data from flash",
+      "layer": "2 Boot",
+      "file": "P13.json",
+      "program": "blink",
+      "passed": true,
+      "events": 17,
+      "variants": [],
+      "faults": [
+        "missing_data_copy"
+      ],
+      "hidden_symptom": "'boot ok' and 'counter=1' print correctly, but a configuration value that was initialised in the source reads as a random number.",
+      "expected": "Boot reaches main without faults; the data_copied step reports a mismatch; \"counter=1\" is correct but \"greeting_len=\" is not 7."
+    },
+    {
+      "id": "P14",
+      "title": "HardFault at reset - the reset vector is missing the Thumb bit",
+      "layer": "2 Boot",
+      "file": "P14.json",
+      "program": "blink",
+      "passed": true,
+      "events": 12,
+      "variants": [],
+      "faults": [
+        "vector_thumb_bit_missing"
+      ],
+      "hidden_symptom": "The board never prints 'boot ok'; the only output is a HardFault dump.",
+      "expected": "The vector_table step reports the missing Thumb bit; Reset_Handler never runs; a HardFault (FORCED) escalated from UsageFault INVSTATE with the stacked PC at Reset_Handler and stacked xPSR.T=0; the fault printer reports it."
+    },
+    {
+      "id": "P15",
+      "title": "PendSV priority not lowest - the context switch runs inside an interrupt handler",
+      "layer": "5 Kernel",
+      "file": "P15.json",
+      "program": "kernel",
+      "passed": true,
+      "events": 720,
+      "variants": [
+        "correct",
+        "pendsv_high"
+      ],
+      "faults": [
+        "pendsv_priority_not_lowest"
+      ],
+      "hidden_symptom": "Under button presses, a long interrupt handler occasionally computes a wrong result and a task's counter jumps; with no button presses everything is fine.",
+      "expected": "With PendSV lowest, the button handler always finishes intact and every switch happens with EXC_RETURN 0xFFFFFFFD; with PendSV at 0x80, switches run on top of the handler (EXC_RETURN 0xFFFFFFF1) and the handler detects corrupted registers."
+    },
+    {
+      "id": "P16",
+      "title": "SysTick period - off-by-one reload and a wrong clock assumption",
+      "layer": "3 Drivers",
+      "file": "P16.json",
+      "program": "tick",
+      "passed": true,
+      "events": 177,
+      "variants": [
+        "correct",
+        "off_by_one",
+        "wrong_clock"
+      ],
+      "faults": [
+        "systick_reload_off_by_one",
+        "wrong_clock_assumption"
+      ],
+      "hidden_symptom": "The scheduler tick looks right in the debugger, but task periods measured on the scope are 12.5 times too long (or drift slowly).",
+      "expected": "correct gives 150000 cycles and 1000 us per tick; off_by_one gives 150001 cycles per tick; wrong_clock gives 150000 cycles but 12500 us per tick."
+    },
+    {
+      "id": "P17",
+      "title": "SVC returns the wrong value - result written to the live r0, not the stacked r0",
+      "layer": "5 Kernel",
+      "file": "P17.json",
+      "program": "kernel",
+      "passed": true,
+      "events": 687,
+      "variants": [],
+      "faults": [
+        "svc_return_in_live_r0"
+      ],
+      "hidden_symptom": "Output appears normally, but every system call reports failure to its caller.",
+      "expected": "No faults, the alphabet is printed, but every write() returns its argument instead of 1, so svc_errors climbs and task B reports it."
+    },
+    {
+      "id": "P18",
+      "title": "Button interrupt does nothing - NVIC not enabled vs no handler installed",
+      "layer": "3 Drivers",
+      "file": "P18.json",
+      "program": "latency",
+      "passed": true,
+      "events": 22,
+      "variants": [
+        "not_enabled",
+        "no_handler"
+      ],
+      "faults": [
+        "irq_not_enabled",
+        "missing_irq_handler"
+      ],
+      "hidden_symptom": "Pressing the button does nothing. In one build the program keeps running normally; in another build it freezes on the first press.",
+      "expected": "not_enabled shows the IRQ pending but never taken (no exception entry, presses=0, the run ends on max_cycles); no_handler enters IRQ_GPIO at Default_Handler and stays there."
+    }
+  ]
+}

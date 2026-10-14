@@ -1,0 +1,67 @@
+id: P06
+title: Three-task round-robin kernel on the SysTick
+layer: "5 Kernel"
+description: >
+  The final checkpoint of weeks 7-9. main builds three task stacks (A blinks
+  the LED, B prints the alphabet through the write system call, C counts and
+  yields), programs the MPU with a guard below each stack, starts SysTick at
+  one tick per 2000 cycles and executes "svc #0". The SVC handler returns
+  into task A as an unprivileged thread on the PSP. Every tick pends PendSV,
+  whose handler saves r4-r11, asks the scheduler for the next task and
+  restores its registers. The run stops after 30 ticks.
+program: kernel
+options:
+  tick_cycles: 2000
+  task_work: 150
+  stop_after_ticks: 30
+config:
+  seed: 1
+  max_cycles: 200000
+expected:
+  summary: 30 ticks, 40+ context switches, all tasks alive, the alphabet appears on the UART, the LED toggles, stack watermarks around 25 percent, no faults.
+  checks:
+    - {check: no_faults}
+    - {check: min_switches, count: 40}
+    - {check: task_alive, task: A}
+    - {check: task_alive, task: C}
+    - {check: uart_contains, text: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+    - {check: global_gt, name: a_iters, value: 5}
+    - {check: global_gt, name: c_count, value: 5}
+    - {check: global_equals, name: svc_errors, value: 0}
+    - {check: global_equals, name: corruptions, value: 0}
+    - {check: event_sequence, kinds: ["boot_step:main_entered", "task_state:READY", "mpu", "syscall", "exception_entry:ISR:SVCall", "context_switch:A", "exception_return", "irq_pend:SysTick", "exception_entry:ISR:SysTick", "irq_pend:PendSV", "tail_chain:ISR:PendSV", "context_switch:B"]}
+what_to_look_for: >
+  After main_entered: four task_state events (A, B, C and idle created, each
+  with its stack range and initial PSP), an mpu event listing eight
+  non-overlapping regions, the SysTick programming event (PendSV priority
+  0xFF reads back as 0xF0: four priority bits), then svc #0: exception_entry
+  for SVCall from main, "svc start" with CONTROL=3, and an exception_return
+  "back to thread mode (unprivileged)" from the PSP. From then on every 2000
+  cycles: irq_pend SysTick, exception_entry SysTick with EXC_RETURN
+  0xFFFFFFFD (frame pushed on the task's PSP), irq_pend PendSV, "SysTick
+  returning, but PendSV is pending: tail-chain", tail_chain PendSV,
+  context_switch A->B with both PSPs, exception_return into B. Task C yields
+  with svc #1, so its slices are short. The viewer timeline shows A, B, C in
+  rotation with thin handler strips between them; click a context_switch to
+  see every suspended task's saved frame. summary.kernel_timing gives the
+  switch cost (about 56 cycles: tail-chain, 8-register save and restore,
+  scheduler, unstacking) and the tick handler cost.
+  summary.kernel.tasks.*.watermark.percent is about 25 (the 64-byte initial
+  frame on a 256-byte stack). The tick is 2000 cycles only to keep the trace
+  short; a real kernel ticks at about 1 kHz (150000 cycles at 150 MHz).
+likely_root_causes:
+  - "Healthy baseline. Compare with P07/P08/P09 for the broken variants."
+  - "If your board shows no switching: SysTick not enabled (CSR bits), TICKINT clear, or PendSV not pended from the tick handler."
+  - "If the first task never starts: the initial frame is built in the wrong order, the xPSR word is missing the Thumb bit, or EXC_RETURN is 0xFFFFFFF9 instead of 0xFFFFFFFD."
+how_to_debug:
+  - "Break in PendSV_Handler and print the PSP and the 16 words above it; they must match the TCB layout diagram (r4-r11 then the hardware frame)."
+  - "Toggle a different GPIO pin in each task and watch the three square waves interleave on the scope at the tick period."
+  - "Check ICSR after the tick handler: PENDSVSET must be 1 until PendSV runs."
+  - "Count switches per second in a global and print it once a second; compare with ticks per second."
+what_this_means: >
+  A preemptive kernel is a timer interrupt, a lowest-priority exception that
+  does the switch, and a stack per task that holds the task's registers while
+  it is not running. The hardware frame is pushed by the core for free; the
+  kernel only adds r4-r11 and swaps PSP. Everything in the trace between two
+  context_switch events is one time slice.
+hidden_symptom: "LED blinks, alphabet scrolls, counter increments; three things happen at once on one core."

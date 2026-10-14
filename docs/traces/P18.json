@@ -1,0 +1,1170 @@
+{
+  "scenario": {
+    "id": "P18",
+    "title": "Button interrupt does nothing - NVIC not enabled vs no handler installed",
+    "layer": "3 Drivers",
+    "description": "The latency program from P04 with one button press, in two broken variants. \"not_enabled\": main writes the priority but never sets the IRQ's bit in NVIC_ISER. The GPIO block still latches the edge and the NVIC marks IRQ 21 pending, but a disabled interrupt is never taken: the program runs on as if nothing happened. \"no_handler\": the interrupt is enabled, but the vector table entry for IRQ 21 still points at Default_Handler, the catch-all loop: the core takes the interrupt and then spins forever.\n",
+    "program": "latency",
+    "options": {
+      "critical_section_len": 60
+    },
+    "config": {
+      "seed": 1,
+      "max_cycles": 12000
+    },
+    "stimuli": [
+      {
+        "action": "button_press",
+        "at_us": 30
+      }
+    ],
+    "variants": [
+      {
+        "name": "not_enabled",
+        "hidden_symptom": "Pressing the button does nothing at all; the main loop keeps running as if no edge happened.",
+        "faults": [
+          {
+            "type": "irq_not_enabled"
+          }
+        ]
+      },
+      {
+        "name": "no_handler",
+        "hidden_symptom": "The program runs until the first button press, then freezes; no fault is reported.",
+        "faults": [
+          {
+            "type": "missing_irq_handler"
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "summary": "not_enabled shows the IRQ pending but never taken (no exception entry, presses=0, the run ends on max_cycles); no_handler enters IRQ_GPIO at Default_Handler and stays there.",
+      "checks": [
+        {
+          "check": "no_faults",
+          "variant": "not_enabled"
+        },
+        {
+          "check": "min_events",
+          "variant": "not_enabled",
+          "kind": "irq_pend",
+          "to": "IRQ_GPIO",
+          "count": 1
+        },
+        {
+          "check": "no_event",
+          "variant": "not_enabled",
+          "kind": "exception_entry"
+        },
+        {
+          "check": "global_equals",
+          "variant": "not_enabled",
+          "name": "presses",
+          "value": 0
+        },
+        {
+          "check": "stop_reason_contains",
+          "variant": "not_enabled",
+          "text": "max_cycles"
+        },
+        {
+          "check": "min_events",
+          "variant": "no_handler",
+          "kind": "exception_entry",
+          "to": "ISR:IRQ_GPIO",
+          "count": 1
+        },
+        {
+          "check": "stop_reason_contains",
+          "variant": "no_handler",
+          "text": "Default_Handler"
+        },
+        {
+          "check": "global_equals",
+          "variant": "no_handler",
+          "name": "presses",
+          "value": 0
+        }
+      ]
+    },
+    "what_to_look_for": "not_enabled: an irq_pend event \"GPIO edge on pin 14\" and then nothing: no exception_entry, no marker pin, presses stays 0, and the run only ends at max_cycles. On the board NVIC_ISPR0 bit 21 is 1 (pending) while NVIC_ISER0 bit 21 is 0 (disabled). no_handler: exception_entry IRQ_GPIO with handler=Default_Handler's address (compare with image_map.vectors and the symbol in \"r2s disasm latency\"), then a kernel event \"Default_Handler reached for IRQ_GPIO (IPSR=37)\" and the run stops there. IPSR = 16 + 21 = 37 is the number to read in the debugger.\n",
+    "likely_root_causes": [
+      "NVIC_EnableIRQ (or the NVIC_ISER write) missing, or written with the wrong bit/word: IRQ n is bit n % 32 of NVIC_ISER[n / 32].",
+      "The peripheral's own interrupt enable (here the GPIO edge enable) set but not the NVIC's, or the reverse: both are needed.",
+      "Handler name misspelled (GPIO_IRQHandler vs IO_IRQ_BANK0_IRQHandler), so the weak alias to Default_Handler stays in the vector table.",
+      "Handler defined in C++ without extern \"C\", so its mangled name does not override the weak symbol."
+    ],
+    "how_to_debug": [
+      "In GDB read NVIC_ISER0 (0xE000E100) and NVIC_ISPR0 (0xE000E200): pending but not enabled is the first variant.",
+      "When the board 'hangs', halt it and 'p/x $xpsr': the low 9 bits (IPSR) give the exception number; 37 = IRQ 21. 'info symbol $pc' shows Default_Handler.",
+      "Check the vector table entry: 'x/xw 0x10000000 + 4*37' must be your handler's address with bit 0 set.",
+      "'arm-none-eabi-nm' the ELF: if the handler symbol is missing or is a weak alias, the name does not match the startup file."
+    ],
+    "what_this_means": "An interrupt needs three things to run your code: the peripheral must raise it, the NVIC must have it enabled, and the vector table must point at your handler. The first variant fails the second condition silently; the second variant fails the third and parks the core in a loop. Reading the pending/enable bits and IPSR tells the two apart in a minute.\n",
+    "hidden_symptom": "Pressing the button does nothing. In one build the program keeps running normally; in another build it freezes on the first press."
+  },
+  "config": {
+    "seed": 1,
+    "cpu_hz": 150000000,
+    "profile": "arm_like",
+    "max_cycles": 12000,
+    "xip_cache_enabled": true,
+    "xip_miss_penalty": 20
+  },
+  "options": {
+    "critical_section_len": 60,
+    "irq_not_enabled": true
+  },
+  "image_map": {
+    "vector_base": "0x10000000",
+    "initial_sp": "0x20082000",
+    "vectors": [
+      {
+        "index": 0,
+        "name": "initial MSP",
+        "value": "0x20082000"
+      },
+      {
+        "index": 1,
+        "name": "Reset",
+        "value": "0x10000101"
+      },
+      {
+        "index": 2,
+        "name": "NMI",
+        "value": "0x10000161"
+      },
+      {
+        "index": 3,
+        "name": "HardFault",
+        "value": "0x10000161"
+      },
+      {
+        "index": 4,
+        "name": "MemManage",
+        "value": "0x10000161"
+      },
+      {
+        "index": 5,
+        "name": "BusFault",
+        "value": "0x10000161"
+      },
+      {
+        "index": 6,
+        "name": "UsageFault",
+        "value": "0x10000161"
+      },
+      {
+        "index": 11,
+        "name": "SVCall",
+        "value": "0x10000161"
+      },
+      {
+        "index": 12,
+        "name": "DebugMonitor",
+        "value": "0x10000161"
+      },
+      {
+        "index": 14,
+        "name": "PendSV",
+        "value": "0x10000161"
+      },
+      {
+        "index": 15,
+        "name": "SysTick",
+        "value": "0x10000161"
+      },
+      {
+        "index": 16,
+        "name": "IRQ_TIMER0",
+        "value": "0x10000161"
+      },
+      {
+        "index": 17,
+        "name": "IRQ1",
+        "value": "0x10000161"
+      },
+      {
+        "index": 18,
+        "name": "IRQ2",
+        "value": "0x10000161"
+      },
+      {
+        "index": 19,
+        "name": "IRQ3",
+        "value": "0x10000161"
+      },
+      {
+        "index": 20,
+        "name": "IRQ4",
+        "value": "0x10000161"
+      },
+      {
+        "index": 21,
+        "name": "IRQ5",
+        "value": "0x10000161"
+      },
+      {
+        "index": 22,
+        "name": "IRQ6",
+        "value": "0x10000161"
+      },
+      {
+        "index": 23,
+        "name": "IRQ7",
+        "value": "0x10000161"
+      }
+    ],
+    "sections": [
+      {
+        "name": "startup",
+        "region": "flash",
+        "base": "0x10000100",
+        "words": 24
+      },
+      {
+        "name": "default_handler",
+        "region": "flash",
+        "base": "0x10000160",
+        "words": 2
+      },
+      {
+        "name": "main",
+        "region": "flash",
+        "base": "0x10000168",
+        "words": 30
+      }
+    ],
+    "data": {},
+    "bss": {
+      "presses": "0x20000000"
+    },
+    "reserved": {},
+    "data_load": "0x100001E0"
+  },
+  "events": [
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P18 variant not_enabled: Button interrupt does nothing - NVIC not enabled vs no handler installed",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P18",
+        "variant": "not_enabled",
+        "faults": [
+          "irq_not_enabled: main never sets the IRQ's bit in NVIC_ISER: the edge is latched by the peripheral, never taken."
+        ],
+        "options": {
+          "critical_section_len": 60,
+          "irq_not_enabled": true
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main"
+        ],
+        "data_words": 0,
+        "bss_words": 1,
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": [],
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true,
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 29,
+      "t_us": 0.193,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 0 word(s) copied from flash 0x100001E0 to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x100001E0",
+        "r1": "0x20000000",
+        "r2": "0x20000000",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": [],
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 84,
+      "t_us": 0.56,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss zeroed: 1 word(s) at 0x20000000..0x20000004 are 0",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x20000004",
+        "r2": "0x20000004",
+        "pc": "0x10000154"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": true,
+        "nonzero": [],
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 84,
+      "t_us": 0.56,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 84 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000158"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true,
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 115,
+      "t_us": 0.767,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'latency test'",
+      "regs": {
+        "r0": "0xE000E400",
+        "r1": "0x00200000",
+        "lr": "0x1000015D",
+        "pc": "0x10000184"
+      },
+      "details": {
+        "text": "latency test",
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 4500,
+      "t_us": 30.0,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "main",
+      "reason": "button on pin 14 pressed (edge at cycle 4500)",
+      "regs": {
+        "r4": "0x00000336",
+        "r5": "0x00000006",
+        "pc": "0x10000194",
+        "xpsr": "0x21000000"
+      },
+      "details": {
+        "pin": 14,
+        "level": 1,
+        "stimulus": true,
+        "nominal": 4500,
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 4500,
+      "t_us": 30.0,
+      "unit": "gpio",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "IRQ_GPIO",
+      "ctx": "main",
+      "reason": "GPIO edge on pin 14",
+      "regs": {},
+      "details": {
+        "exception": 37,
+        "priority": 64,
+        "variant": "not_enabled"
+      }
+    },
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P18 variant no_handler: Button interrupt does nothing - NVIC not enabled vs no handler installed",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P18",
+        "variant": "no_handler",
+        "faults": [
+          "missing_irq_handler: The IRQ is enabled but its vector still points at Default_Handler."
+        ],
+        "options": {
+          "critical_section_len": 60,
+          "missing_irq_handler": true
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main"
+        ],
+        "data_words": 0,
+        "bss_words": 1,
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": [],
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true,
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 29,
+      "t_us": 0.193,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 0 word(s) copied from flash 0x100001E4 to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x100001E4",
+        "r1": "0x20000000",
+        "r2": "0x20000000",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": [],
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 84,
+      "t_us": 0.56,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss zeroed: 1 word(s) at 0x20000000..0x20000004 are 0",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x20000004",
+        "r2": "0x20000004",
+        "pc": "0x10000154"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": true,
+        "nonzero": [],
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 84,
+      "t_us": 0.56,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 84 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000158"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true,
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 139,
+      "t_us": 0.927,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'latency test'",
+      "regs": {
+        "r0": "0xE000E100",
+        "r1": "0x00200000",
+        "lr": "0x1000015D",
+        "pc": "0x10000188"
+      },
+      "details": {
+        "text": "latency test",
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 4501,
+      "t_us": 30.007,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "main",
+      "reason": "button on pin 14 pressed (edge at cycle 4500)",
+      "regs": {
+        "r4": "0x00000331",
+        "r5": "0x00000001",
+        "pc": "0x1000018C",
+        "xpsr": "0x21000000"
+      },
+      "details": {
+        "pin": 14,
+        "level": 1,
+        "stimulus": true,
+        "nominal": 4500,
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 4501,
+      "t_us": 30.007,
+      "unit": "gpio",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "IRQ_GPIO",
+      "ctx": "main",
+      "reason": "GPIO edge on pin 14",
+      "regs": {},
+      "details": {
+        "exception": 37,
+        "priority": 64,
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 4513,
+      "t_us": 30.087,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:IRQ_GPIO",
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "IRQ_GPIO taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[37]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x10000160",
+        "xpsr": "0x21000025"
+      },
+      "details": {
+        "exception": 37,
+        "name": "IRQ_GPIO",
+        "handler": "0x10000160",
+        "vector": "0x10000161",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 64,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0xE000E100",
+          "r1": "0x00200000",
+          "r2": "0x20000004",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x1000018C",
+          "xpsr": "0x21000000"
+        },
+        "pc": "0x10000160",
+        "variant": "no_handler"
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 4513,
+      "t_us": 30.087,
+      "unit": "cpu",
+      "kind": "kernel",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "Default_Handler reached for IRQ_GPIO (IPSR=37): no handler was installed for this exception, so the vector table points at the catch-all loop; the core spins here forever",
+      "regs": {
+        "pc": "0x10000164"
+      },
+      "details": {
+        "exception": 37,
+        "variant": "no_handler"
+      }
+    }
+  ],
+  "summary": {
+    "variants": {
+      "not_enabled": {
+        "variant": "not_enabled",
+        "profile": "arm_like",
+        "stop_reason": "max_cycles (12000) reached",
+        "halted": false,
+        "lockup": false,
+        "cycles": 12000,
+        "time_us": 80.0,
+        "instructions_executed": 9590,
+        "instret": 9598,
+        "cpi": 1.25,
+        "exception_entries": 0,
+        "tail_chains": 0,
+        "wfi_sleeps": 0,
+        "critical_sections": {
+          "count": 0,
+          "longest_cycles": 0
+        },
+        "ignored_privileged_ops": 0,
+        "fault_registers": {
+          "CFSR": "0x00000000",
+          "HFSR": "0x00000000",
+          "MMFAR": "0x00000000",
+          "BFAR": "0x00000000"
+        },
+        "boot_steps": [
+          {
+            "step": "power_on",
+            "ok": true,
+            "t_cycles": 0,
+            "image_sections": [
+              "startup",
+              "default_handler",
+              "main"
+            ],
+            "data_words": 0,
+            "bss_words": 1
+          },
+          {
+            "step": "vector_table",
+            "ok": true,
+            "t_cycles": 0,
+            "vector_base": 268435456,
+            "initial_sp": 537403392,
+            "reset_vector": 268435713,
+            "problems": []
+          },
+          {
+            "step": "reset_handler",
+            "ok": true,
+            "t_cycles": 0
+          },
+          {
+            "step": "data_copied",
+            "ok": true,
+            "t_cycles": 29,
+            "mismatches": []
+          },
+          {
+            "step": "bss_zeroed",
+            "ok": true,
+            "t_cycles": 84,
+            "nonzero": []
+          },
+          {
+            "step": "main_entered",
+            "ok": true,
+            "t_cycles": 84
+          }
+        ],
+        "faults": [],
+        "uart_output": "latency test\n",
+        "uart_lines": [
+          "latency test"
+        ],
+        "gpio_toggles": {},
+        "xip_cache": {
+          "hits": 9585,
+          "misses": 5,
+          "enabled": true
+        },
+        "memory_accesses": {
+          "FLASH": 9590,
+          "SRAM": 1,
+          "PERIPH": 13,
+          "PPB": 1
+        },
+        "cycles_by_context": {
+          "boot": 84,
+          "main": 11916
+        },
+        "final_registers": {
+          "r0": "0xE000E400",
+          "r1": "0x00200000",
+          "r2": "0x20000004",
+          "r3": "0x00000000",
+          "r4": "0x000008CA",
+          "r5": "0x00000002",
+          "r6": "0x00000000",
+          "r7": "0x00000000",
+          "r8": "0x00000000",
+          "r9": "0x00000000",
+          "r10": "0x00000000",
+          "r11": "0x00000000",
+          "r12": "0x00000000",
+          "sp": "0x20082000",
+          "msp": "0x20082000",
+          "psp": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000188",
+          "xpsr": "0x21000000",
+          "control": 0,
+          "primask": 0,
+          "mode": "thread",
+          "privileged": true,
+          "sp_sel": "msp"
+        },
+        "systick_ticks": 0,
+        "globals": {
+          "presses": 0
+        },
+        "markers": [],
+        "faults_injected": [
+          "irq_not_enabled: main never sets the IRQ's bit in NVIC_ISER: the edge is latched by the peripheral, never taken."
+        ],
+        "options": {
+          "critical_section_len": 60,
+          "irq_not_enabled": true
+        },
+        "latency": {
+          "samples": 0
+        },
+        "cycles_to_main": 84
+      },
+      "no_handler": {
+        "variant": "no_handler",
+        "profile": "arm_like",
+        "stop_reason": "spinning in Default_Handler for IRQ_GPIO (IPSR=37)",
+        "halted": true,
+        "lockup": false,
+        "cycles": 4513,
+        "time_us": 30.087,
+        "instructions_executed": 3502,
+        "instret": 3509,
+        "cpi": 1.286,
+        "exception_entries": 1,
+        "tail_chains": 0,
+        "wfi_sleeps": 0,
+        "critical_sections": {
+          "count": 0,
+          "longest_cycles": 0
+        },
+        "ignored_privileged_ops": 0,
+        "fault_registers": {
+          "CFSR": "0x00000000",
+          "HFSR": "0x00000000",
+          "MMFAR": "0x00000000",
+          "BFAR": "0x00000000"
+        },
+        "boot_steps": [
+          {
+            "step": "power_on",
+            "ok": true,
+            "t_cycles": 0,
+            "image_sections": [
+              "startup",
+              "default_handler",
+              "main"
+            ],
+            "data_words": 0,
+            "bss_words": 1
+          },
+          {
+            "step": "vector_table",
+            "ok": true,
+            "t_cycles": 0,
+            "vector_base": 268435456,
+            "initial_sp": 537403392,
+            "reset_vector": 268435713,
+            "problems": []
+          },
+          {
+            "step": "reset_handler",
+            "ok": true,
+            "t_cycles": 0
+          },
+          {
+            "step": "data_copied",
+            "ok": true,
+            "t_cycles": 29,
+            "mismatches": []
+          },
+          {
+            "step": "bss_zeroed",
+            "ok": true,
+            "t_cycles": 84,
+            "nonzero": []
+          },
+          {
+            "step": "main_entered",
+            "ok": true,
+            "t_cycles": 84
+          }
+        ],
+        "faults": [],
+        "uart_output": "latency test\n",
+        "uart_lines": [
+          "latency test"
+        ],
+        "gpio_toggles": {},
+        "xip_cache": {
+          "hits": 3496,
+          "misses": 6,
+          "enabled": true
+        },
+        "memory_accesses": {
+          "FLASH": 3502,
+          "SRAM": 9,
+          "PERIPH": 13,
+          "PPB": 2
+        },
+        "cycles_by_context": {
+          "ISR:IRQ_GPIO": 12,
+          "boot": 84,
+          "main": 4417
+        },
+        "final_registers": {
+          "r0": "0xE000E100",
+          "r1": "0x00200000",
+          "r2": "0x20000004",
+          "r3": "0x00000000",
+          "r4": "0x00000331",
+          "r5": "0x00000001",
+          "r6": "0x00000000",
+          "r7": "0x00000000",
+          "r8": "0x00000000",
+          "r9": "0x00000000",
+          "r10": "0x00000000",
+          "r11": "0x00000000",
+          "r12": "0x00000000",
+          "sp": "0x20081FE0",
+          "msp": "0x20081FE0",
+          "psp": "0x00000000",
+          "lr": "0xFFFFFFF9",
+          "pc": "0x10000164",
+          "xpsr": "0x21000025",
+          "control": 0,
+          "primask": 0,
+          "mode": "handler",
+          "privileged": true,
+          "sp_sel": "msp"
+        },
+        "systick_ticks": 0,
+        "globals": {
+          "presses": 0
+        },
+        "markers": [],
+        "faults_injected": [
+          "missing_irq_handler: The IRQ is enabled but its vector still points at Default_Handler."
+        ],
+        "options": {
+          "critical_section_len": 60,
+          "missing_irq_handler": true
+        },
+        "latency": {
+          "samples": 0
+        },
+        "cycles_to_main": 84
+      }
+    },
+    "stop_reason": "not_enabled: max_cycles (12000) reached; no_handler: spinning in Default_Handler for IRQ_GPIO (IPSR=37)",
+    "measurements": [
+      {
+        "name": "reset to main",
+        "variant": "not_enabled",
+        "value": 84,
+        "unit": "cycles",
+        "note": "0.56 us at 150 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": "not_enabled",
+        "value": 1.25,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      },
+      {
+        "name": "reset to main",
+        "variant": "no_handler",
+        "value": 84,
+        "unit": "cycles",
+        "note": "0.56 us at 150 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": "no_handler",
+        "value": 1.286,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      }
+    ]
+  },
+  "variants": [
+    "not_enabled",
+    "no_handler"
+  ],
+  "result": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "no_faults",
+        "passed": true,
+        "detail": "0 fault(s)",
+        "variant": "not_enabled",
+        "args": {}
+      },
+      {
+        "name": "min_events",
+        "passed": true,
+        "detail": "1 x irq_pend",
+        "variant": "not_enabled",
+        "args": {
+          "kind": "irq_pend",
+          "to": "IRQ_GPIO",
+          "count": 1
+        }
+      },
+      {
+        "name": "no_event",
+        "passed": true,
+        "detail": "0 x exception_entry",
+        "variant": "not_enabled",
+        "args": {
+          "kind": "exception_entry"
+        }
+      },
+      {
+        "name": "global_equals",
+        "passed": true,
+        "detail": "presses=0",
+        "variant": "not_enabled",
+        "args": {
+          "name": "presses",
+          "value": 0
+        }
+      },
+      {
+        "name": "stop_reason_contains",
+        "passed": true,
+        "detail": "max_cycles (12000) reached",
+        "variant": "not_enabled",
+        "args": {
+          "text": "max_cycles"
+        }
+      },
+      {
+        "name": "min_events",
+        "passed": true,
+        "detail": "1 x exception_entry",
+        "variant": "no_handler",
+        "args": {
+          "kind": "exception_entry",
+          "to": "ISR:IRQ_GPIO",
+          "count": 1
+        }
+      },
+      {
+        "name": "stop_reason_contains",
+        "passed": true,
+        "detail": "spinning in Default_Handler for IRQ_GPIO (IPSR=37)",
+        "variant": "no_handler",
+        "args": {
+          "text": "Default_Handler"
+        }
+      },
+      {
+        "name": "global_equals",
+        "passed": true,
+        "detail": "presses=0",
+        "variant": "no_handler",
+        "args": {
+          "name": "presses",
+          "value": 0
+        }
+      }
+    ]
+  }
+}

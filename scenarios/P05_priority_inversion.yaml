@@ -1,0 +1,67 @@
+id: P05
+title: Two interrupts - priority inversion vs fixed priorities, tail-chaining
+layer: "4 Exceptions"
+description: >
+  A slow timer interrupt (IRQ_TIMER0, 200 loop iterations of work) and an
+  urgent button interrupt (IRQ_GPIO). The button is pressed while the timer
+  handler is running. In the "inversion" variant both share priority 0x80, so
+  the button must wait for the whole timer handler and is then tail-chained.
+  In the "fixed" variant the button gets priority 0x40 (more urgent), pre-empts
+  the timer handler in the middle, and returns into it.
+program: priority
+options:
+  alarm_us: 20
+  timer_work: 200
+config:
+  seed: 1
+  max_cycles: 40000
+stimuli:
+  - {action: button_press, at_us: 21}
+  - {action: halt, at_us: 120, reason: "end of test window"}
+variants:
+  - name: inversion
+    options: {timer_priority: 0x80, button_priority: 0x80}
+  - name: fixed
+    options: {timer_priority: 0x80, button_priority: 0x40}
+expected:
+  summary: With equal priorities the button waits ~500 cycles and is tail-chained after the timer; with a higher priority it is taken in ~12 cycles by pre-empting the timer handler.
+  checks:
+    - {check: no_faults, variant: inversion}
+    - {check: no_faults, variant: fixed}
+    - {check: tail_chains_min, variant: inversion, count: 1}
+    - {check: priority_preempted, variant: inversion, value: false}
+    - {check: priority_preempted, variant: fixed, value: true}
+    - {check: variant_lt, metric: priority.button_latency, a: fixed, b: inversion}
+what_to_look_for: >
+  Inversion variant: exception_entry for IRQ_TIMER0, then the button irq_pend
+  while "ISR:IRQ_TIMER0" is the context, then no entry until the timer
+  handler's "exception_return ... tail-chain" event, followed by a tail_chain
+  event for IRQ_GPIO. summary.variants.inversion.priority.button_latency is
+  several hundred cycles and tail_chains is 1. Fixed variant: exception_entry
+  for IRQ_GPIO with from="ISR:IRQ_TIMER0" (pre-emption), the marker pin
+  toggles, exception_return back to "ISR:IRQ_TIMER0", and the timer handler
+  finishes afterwards. button_latency is 12 cycles, the GPIO entry event
+  shows LR=EXC_RETURN 0xFFFFFFF1 ("return to handler mode") and its stacked
+  frame holds the timer handler's registers, with the stacked PC inside
+  Timer_Handler's loop. The priorities are byte-packed: IRQ_TIMER0 is byte 0
+  of NVIC_IPR0, IRQ_GPIO (IRQ 21) is byte 1 of NVIC_IPR5.
+likely_root_causes:
+  - "All interrupts left at the default priority 0 (or all the same), so nothing can pre-empt anything."
+  - "Priorities written to the wrong NVIC_IPR byte (they are byte-packed on the real chip) or written with the wrong shift for the implemented bits."
+  - "A long handler doing work that belongs in the main loop or a task."
+  - "Priority grouping (AIRCR.PRIGROUP) set so that the intended pre-emption bits are sub-priority bits."
+how_to_debug:
+  - "Read back NVIC->IPR for both IRQs in GDB and check the upper bits actually differ."
+  - "Put a marker pin in each handler (set on entry, clear on exit) and look at both on the scope: nested pulses mean pre-emption, back-to-back pulses mean tail-chaining."
+  - "Set a breakpoint in the button handler and inspect the stacked frame: if the stacked PC is inside the timer handler, the pre-emption worked."
+  - "Shorten the slow handler and move its work to the main loop; the long tail disappears regardless of priorities."
+what_this_means: >
+  Only a numerically lower priority can pre-empt a running handler. An
+  interrupt of equal priority cannot pre-empt: it stays pending until the
+  running handler returns, and when several are pending at the same priority
+  the one with the lowest exception number is taken first (not the one that
+  arrived first). The NVIC then saves the unstack/restack by tail-chaining it. A priority scheme is the
+  only way to bound the latency of the urgent interrupt, and the stacked
+  frame of the pre-empting handler is the proof that the processor stopped in
+  the middle of another handler.
+hidden_symptom: "Button response time depends on whether the timer handler happens to be running."

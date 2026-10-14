@@ -1,0 +1,794 @@
+{
+  "scenario": {
+    "id": "P02",
+    "title": "Boot fault - startup code forgets to zero .bss",
+    "layer": "2 Boot",
+    "description": "The same program as P01, but the reset handler skips the .bss loop. SRAM is not zero at power-on (the model fills it with seeded pseudo-random words), so the uninitialised global \"counter\" starts with garbage instead of 0 and the program prints a nonsense value. Nothing crashes, which is exactly why this bug is hard to find on real hardware.\n",
+    "program": "blink",
+    "options": {},
+    "faults": [
+      {
+        "type": "missing_bss_zero"
+      }
+    ],
+    "config": {
+      "seed": 1,
+      "max_cycles": 50000
+    },
+    "expected": {
+      "summary": "Boot reaches main without faults, but the bss_zeroed step reports garbage and \"counter=\" is not 1.",
+      "checks": [
+        {
+          "check": "boot_step",
+          "step": "bss_zeroed",
+          "ok": false
+        },
+        {
+          "check": "boot_step",
+          "step": "data_copied",
+          "ok": true
+        },
+        {
+          "check": "no_faults"
+        },
+        {
+          "check": "uart_contains",
+          "text": "boot ok"
+        },
+        {
+          "check": "uart_not_contains",
+          "text": "counter=1\n"
+        },
+        {
+          "check": "uart_contains",
+          "text": "greeting_len=7"
+        }
+      ]
+    },
+    "what_to_look_for": "Compare with P01. The boot_step event for bss_zeroed says the check FAILED and names the global that still holds garbage (counter=0x........). The program then runs normally: \"boot ok\", six LED edges, but the UART line \"counter=\" shows a large random number instead of 1, while \"greeting_len=7\" is still correct because .data was copied. Change the seed in the YAML and the garbage value changes: the symptom is non-deterministic on real hardware.\n",
+    "likely_root_causes": [
+      "The reset handler has no .bss loop, or loops from __bss_start to __bss_start (wrong end symbol).",
+      "The linker script does not define __bss_start/__bss_end, or they are not aligned so the loop stops early.",
+      "A .bss section was renamed (.bss.*, COMMON) and the linker script does not collect it into the zeroed range.",
+      "Globals placed in .noinit on purpose, then read as if they were zeroed."
+    ],
+    "how_to_debug": [
+      "In GDB after reset, before main: 'print &counter' then 'x/wx &counter'. A non-zero value before any code touched it is the bug.",
+      "Run 'arm-none-eabi-nm -n' or 'readelf -S' and check the symbol lives between __bss_start and __bss_end.",
+      "Break on main, inspect several .bss globals: if they are all random, the loop never ran; if only the last ones are, the end symbol is wrong.",
+      "Power-cycle the board (not just reset): the value changes between power cycles when SRAM retains nothing."
+    ],
+    "what_this_means": "C promises that globals without an initialiser are zero, but it is the startup code, not the hardware, that keeps that promise. A missing .bss loop produces a program that is correct in a simulator that zeroes memory and wrong on a board whose SRAM wakes up with random contents.\n",
+    "hidden_symptom": "LED blinks, 'boot ok' prints, but 'counter=' shows a huge number instead of 1 and it changes between power cycles."
+  },
+  "config": {
+    "seed": 1,
+    "cpu_hz": 150000000,
+    "profile": "arm_like",
+    "max_cycles": 50000,
+    "xip_cache_enabled": true,
+    "xip_miss_penalty": 20
+  },
+  "options": {
+    "skip_bss_zero": true
+  },
+  "image_map": {
+    "vector_base": "0x10000000",
+    "initial_sp": "0x20082000",
+    "vectors": [
+      {
+        "index": 0,
+        "name": "initial MSP",
+        "value": "0x20082000"
+      },
+      {
+        "index": 1,
+        "name": "Reset",
+        "value": "0x10000101"
+      },
+      {
+        "index": 2,
+        "name": "NMI",
+        "value": "0x10000141"
+      },
+      {
+        "index": 3,
+        "name": "HardFault",
+        "value": "0x100001B9"
+      },
+      {
+        "index": 4,
+        "name": "MemManage",
+        "value": "0x100001B9"
+      },
+      {
+        "index": 5,
+        "name": "BusFault",
+        "value": "0x100001B9"
+      },
+      {
+        "index": 6,
+        "name": "UsageFault",
+        "value": "0x100001B9"
+      },
+      {
+        "index": 11,
+        "name": "SVCall",
+        "value": "0x10000141"
+      },
+      {
+        "index": 12,
+        "name": "DebugMonitor",
+        "value": "0x10000141"
+      },
+      {
+        "index": 14,
+        "name": "PendSV",
+        "value": "0x10000141"
+      },
+      {
+        "index": 15,
+        "name": "SysTick",
+        "value": "0x10000141"
+      },
+      {
+        "index": 16,
+        "name": "IRQ_TIMER0",
+        "value": "0x10000141"
+      },
+      {
+        "index": 17,
+        "name": "IRQ1",
+        "value": "0x10000141"
+      },
+      {
+        "index": 18,
+        "name": "IRQ2",
+        "value": "0x10000141"
+      },
+      {
+        "index": 19,
+        "name": "IRQ3",
+        "value": "0x10000141"
+      },
+      {
+        "index": 20,
+        "name": "IRQ4",
+        "value": "0x10000141"
+      },
+      {
+        "index": 21,
+        "name": "IRQ5",
+        "value": "0x10000141"
+      },
+      {
+        "index": 22,
+        "name": "IRQ6",
+        "value": "0x10000141"
+      },
+      {
+        "index": 23,
+        "name": "IRQ7",
+        "value": "0x10000141"
+      }
+    ],
+    "sections": [
+      {
+        "name": "startup",
+        "region": "flash",
+        "base": "0x10000100",
+        "words": 16
+      },
+      {
+        "name": "default_handler",
+        "region": "flash",
+        "base": "0x10000140",
+        "words": 2
+      },
+      {
+        "name": "main",
+        "region": "flash",
+        "base": "0x10000148",
+        "words": 28
+      },
+      {
+        "name": "faults",
+        "region": "flash",
+        "base": "0x100001B8",
+        "words": 2
+      }
+    ],
+    "data": {
+      "greeting_len": "0x20000000"
+    },
+    "bss": {
+      "counter": "0x20000004"
+    },
+    "reserved": {},
+    "data_load": "0x100001C0"
+  },
+  "events": [
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P02: Boot fault - startup code forgets to zero .bss",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P02",
+        "variant": null,
+        "faults": [
+          "missing_bss_zero: Reset handler does not zero .bss: uninitialised globals keep power-on garbage."
+        ],
+        "options": {
+          "skip_bss_zero": true
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main",
+          "faults"
+        ],
+        "data_words": 1,
+        "bss_words": 1
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": []
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 79,
+      "t_us": 0.527,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 1 word(s) copied from flash 0x100001C0 to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x100001C4",
+        "r1": "0x20000004",
+        "r2": "0x20000004",
+        "r3": "0x00000007",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": []
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 79,
+      "t_us": 0.527,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss check FAILED, garbage left in: counter=0x91B7584A",
+      "regs": {
+        "pc": "0x10000134"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": false,
+        "nonzero": [
+          "counter=0x91B7584A"
+        ]
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 79,
+      "t_us": 0.527,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 79 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000138"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 81,
+      "t_us": 0.54,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'boot ok'",
+      "regs": {
+        "lr": "0x1000013D",
+        "pc": "0x1000014C"
+      },
+      "details": {
+        "text": "boot ok"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 137,
+      "t_us": 0.913,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "main",
+      "reason": "LED pin 25 -> 1",
+      "regs": {
+        "msp": "0x20081FF8",
+        "pc": "0x10000158"
+      },
+      "details": {
+        "pin": 25,
+        "level": 1
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 229,
+      "t_us": 1.527,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "1",
+      "to": "0",
+      "ctx": "main",
+      "reason": "LED pin 25 -> 0",
+      "regs": {
+        "r0": "0x00000000",
+        "lr": "0x1000015D",
+        "pc": "0x10000160"
+      },
+      "details": {
+        "pin": 25,
+        "level": 0
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 325,
+      "t_us": 2.167,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "main",
+      "reason": "LED pin 25 -> 1",
+      "regs": {
+        "r4": "0x00000001",
+        "lr": "0x10000165",
+        "pc": "0x10000158",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "pin": 25,
+        "level": 1
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 397,
+      "t_us": 2.647,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "1",
+      "to": "0",
+      "ctx": "main",
+      "reason": "LED pin 25 -> 0",
+      "regs": {
+        "lr": "0x1000015D",
+        "pc": "0x10000160",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "pin": 25,
+        "level": 0
+      }
+    },
+    {
+      "seq": 12,
+      "t_cycles": 473,
+      "t_us": 3.153,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "main",
+      "reason": "LED pin 25 -> 1",
+      "regs": {
+        "r4": "0x00000002",
+        "lr": "0x10000165",
+        "pc": "0x10000158",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "pin": 25,
+        "level": 1
+      }
+    },
+    {
+      "seq": 13,
+      "t_cycles": 545,
+      "t_us": 3.633,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "1",
+      "to": "0",
+      "ctx": "main",
+      "reason": "LED pin 25 -> 0",
+      "regs": {
+        "lr": "0x1000015D",
+        "pc": "0x10000160",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "pin": 25,
+        "level": 0
+      }
+    },
+    {
+      "seq": 14,
+      "t_cycles": 680,
+      "t_us": 4.533,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'counter=2444712011'",
+      "regs": {
+        "r0": "0x91B7584B",
+        "r1": "0x91B7584B",
+        "r4": "0x00000003",
+        "lr": "0x10000165",
+        "pc": "0x1000018C"
+      },
+      "details": {
+        "text": "counter=2444712011"
+      }
+    },
+    {
+      "seq": 15,
+      "t_cycles": 736,
+      "t_us": 4.907,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'greeting_len=7'",
+      "regs": {
+        "r0": "0x00000007",
+        "pc": "0x1000019C"
+      },
+      "details": {
+        "text": "greeting_len=7"
+      }
+    },
+    {
+      "seq": 16,
+      "t_cycles": 739,
+      "t_us": 4.927,
+      "unit": "cpu",
+      "kind": "halt",
+      "from": "main",
+      "to": "HALT",
+      "ctx": "main",
+      "reason": "halt instruction executed (end of program)",
+      "regs": {
+        "r4": "0x00000000",
+        "msp": "0x20082000",
+        "lr": "0x1000013D",
+        "pc": "0x100001A4"
+      },
+      "details": {
+        "pc": "0x100001A4"
+      }
+    }
+  ],
+  "summary": {
+    "variant": null,
+    "profile": "arm_like",
+    "stop_reason": "halt instruction",
+    "halted": true,
+    "lockup": false,
+    "cycles": 739,
+    "time_us": 4.927,
+    "instructions_executed": 312,
+    "instret": 331,
+    "cpi": 2.233,
+    "exception_entries": 0,
+    "tail_chains": 0,
+    "wfi_sleeps": 0,
+    "critical_sections": {
+      "count": 0,
+      "longest_cycles": 0
+    },
+    "ignored_privileged_ops": 0,
+    "fault_registers": {
+      "CFSR": "0x00000000",
+      "HFSR": "0x00000000",
+      "MMFAR": "0x00000000",
+      "BFAR": "0x00000000"
+    },
+    "boot_steps": [
+      {
+        "step": "power_on",
+        "ok": true,
+        "t_cycles": 0,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main",
+          "faults"
+        ],
+        "data_words": 1,
+        "bss_words": 1
+      },
+      {
+        "step": "vector_table",
+        "ok": true,
+        "t_cycles": 0,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": []
+      },
+      {
+        "step": "reset_handler",
+        "ok": true,
+        "t_cycles": 0
+      },
+      {
+        "step": "data_copied",
+        "ok": true,
+        "t_cycles": 79,
+        "mismatches": []
+      },
+      {
+        "step": "bss_zeroed",
+        "ok": false,
+        "t_cycles": 79,
+        "nonzero": [
+          "counter=0x91B7584A"
+        ]
+      },
+      {
+        "step": "main_entered",
+        "ok": true,
+        "t_cycles": 79
+      }
+    ],
+    "faults": [],
+    "uart_output": "boot ok\ncounter=2444712011\ngreeting_len=7\n",
+    "uart_lines": [
+      "boot ok",
+      "counter=2444712011",
+      "greeting_len=7"
+    ],
+    "gpio_toggles": {
+      "25": 6
+    },
+    "xip_cache": {
+      "hits": 306,
+      "misses": 7,
+      "enabled": true
+    },
+    "memory_accesses": {
+      "FLASH": 313,
+      "SRAM": 32,
+      "PERIPH": 48,
+      "PPB": 0
+    },
+    "cycles_by_context": {
+      "boot": 79,
+      "main": 660
+    },
+    "final_registers": {
+      "r0": "0x00000007",
+      "r1": "0x91B7584B",
+      "r2": "0x20000004",
+      "r3": "0x00000007",
+      "r4": "0x00000000",
+      "r5": "0x00000000",
+      "r6": "0x00000000",
+      "r7": "0x00000000",
+      "r8": "0x00000000",
+      "r9": "0x00000000",
+      "r10": "0x00000000",
+      "r11": "0x00000000",
+      "r12": "0x00000000",
+      "sp": "0x20082000",
+      "msp": "0x20082000",
+      "psp": "0x00000000",
+      "lr": "0x1000013D",
+      "pc": "0x100001A4",
+      "xpsr": "0x61000000",
+      "control": 0,
+      "primask": 0,
+      "mode": "thread",
+      "privileged": true,
+      "sp_sel": "msp"
+    },
+    "systick_ticks": 0,
+    "globals": {
+      "greeting_len": 7,
+      "counter": 2444712011
+    },
+    "markers": [],
+    "faults_injected": [
+      "missing_bss_zero: Reset handler does not zero .bss: uninitialised globals keep power-on garbage."
+    ],
+    "options": {
+      "skip_bss_zero": true
+    },
+    "cycles_to_main": 79,
+    "measurements": [
+      {
+        "name": "reset to main",
+        "variant": null,
+        "value": 79,
+        "unit": "cycles",
+        "note": "0.53 us at 150 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": null,
+        "value": 2.233,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      }
+    ]
+  },
+  "variants": [],
+  "result": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "boot_step",
+        "passed": true,
+        "detail": "bss_zeroed: ok=False",
+        "variant": null,
+        "args": {
+          "step": "bss_zeroed",
+          "ok": false
+        }
+      },
+      {
+        "name": "boot_step",
+        "passed": true,
+        "detail": "data_copied: ok=True",
+        "variant": null,
+        "args": {
+          "step": "data_copied",
+          "ok": true
+        }
+      },
+      {
+        "name": "no_faults",
+        "passed": true,
+        "detail": "0 fault(s)",
+        "variant": null,
+        "args": {}
+      },
+      {
+        "name": "uart_contains",
+        "passed": true,
+        "detail": "'boot ok\\ncounter=2444712011\\ngreeting_len=7\\n'",
+        "variant": null,
+        "args": {
+          "text": "boot ok"
+        }
+      },
+      {
+        "name": "uart_not_contains",
+        "passed": true,
+        "detail": "'boot ok\\ncounter=2444712011\\ngreeting_len=7\\n'",
+        "variant": null,
+        "args": {
+          "text": "counter=1\n"
+        }
+      },
+      {
+        "name": "uart_contains",
+        "passed": true,
+        "detail": "'boot ok\\ncounter=2444712011\\ngreeting_len=7\\n'",
+        "variant": null,
+        "args": {
+          "text": "greeting_len=7"
+        }
+      }
+    ]
+  }
+}

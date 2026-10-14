@@ -1,0 +1,805 @@
+{
+  "scenario": {
+    "id": "P14",
+    "title": "HardFault at reset - the reset vector is missing the Thumb bit",
+    "layer": "2 Boot",
+    "description": "The vector table was written by hand and the reset entry holds the plain address of Reset_Handler with bit 0 clear. Cortex-M only executes Thumb code: bit 0 of every vector must be 1, and the core copies it into the xPSR T bit. With T=0 the very first instruction raises a UsageFault INVSTATE. UsageFault is disabled at reset, so it escalates to HardFault. The HardFault vector is correct, so the fault handler runs, prints the fault registers on the UART and stops. Not one line of the startup code ran.\n",
+    "program": "blink",
+    "options": {},
+    "faults": [
+      {
+        "type": "vector_thumb_bit_missing",
+        "exception": 1
+      }
+    ],
+    "config": {
+      "seed": 1,
+      "max_cycles": 20000
+    },
+    "expected": {
+      "summary": "The vector_table step reports the missing Thumb bit; Reset_Handler never runs; a HardFault (FORCED) escalated from UsageFault INVSTATE with the stacked PC at Reset_Handler and stacked xPSR.T=0; the fault printer reports it.",
+      "checks": [
+        {
+          "check": "boot_step",
+          "step": "vector_table",
+          "ok": false
+        },
+        {
+          "check": "boot_problem_contains",
+          "text": "Thumb bit missing"
+        },
+        {
+          "check": "no_event",
+          "kind": "boot_step",
+          "to": "reset_handler"
+        },
+        {
+          "check": "fault_kind",
+          "kind": "HardFault"
+        },
+        {
+          "check": "fault_flag",
+          "flag": "INVSTATE"
+        },
+        {
+          "check": "fault_escalated_from",
+          "kind": "UsageFault"
+        },
+        {
+          "check": "fault_count",
+          "count": 1
+        },
+        {
+          "check": "uart_contains",
+          "text": "*** HardFault ***"
+        },
+        {
+          "check": "uart_contains",
+          "text": "UFSR.INVSTATE"
+        },
+        {
+          "check": "uart_not_contains",
+          "text": "boot ok"
+        },
+        {
+          "check": "lockup",
+          "value": false
+        }
+      ]
+    },
+    "what_to_look_for": "The vector_table boot step reads \"word1 -> 0x10000100 -> PC=0x10000100, xPSR.T=0\" and flags \"reset vector has bit 0 clear\". There is no reset_handler boot step: the first fetch never executes. The fault event says UsageFault INVSTATE at PC=0x10000100 escalated to HardFault (UsageFault disabled in SHCSR). The exception_entry for HardFault shows the stacked frame: pc=0x10000100 (Reset_Handler itself) and xpsr=0x00000000 (T bit clear, IPSR 0). The UART shows the fault printer's output: CFSR=0x00020000 (UFSR.INVSTATE), HFSR=0x40000000 (FORCED). Compare the vector table entries in image_map with P01: every handler entry there ends in an odd digit.\n",
+    "likely_root_causes": [
+      "A hand-written vector table in assembly that uses a label without .thumb_func (or .type func, %function), so the assembler does not set bit 0.",
+      "A vector table filled with computed addresses (e.g. (uint32_t)&handler & ~1, or a constant like 0x10000100).",
+      "Relocating the vector table to SRAM and copying entries through a mask that clears bit 0.",
+      "The same bug in a branch target: 'bx r0' with an even address, or a function pointer built from a data address, gives the same INVSTATE fault later in the program."
+    ],
+    "how_to_debug": [
+      "Dump the table: 'x/4xw 0x10000000' in GDB. Word 1 (reset) and every handler entry must be odd (0x....1, 0x....3 ...).",
+      "In the HardFault handler read HFSR (0xE000ED2C): FORCED set means look at CFSR (0xE000ED28); bit 17 (INVSTATE) points at the Thumb bit.",
+      "Look at the stacked xPSR: bit 24 (T) is 0. The stacked PC is the address the core tried to execute in the wrong state.",
+      "Fix the source (.thumb_func, or let the C compiler emit the table) and confirm with 'arm-none-eabi-objdump -s -j .vectors' that the entries are odd."
+    ],
+    "what_this_means": "The Thumb bit is how Cortex-M checks that a code address really is a Thumb code address. It lives in bit 0 of every vector, of every bx target and of the stacked return state. Forgetting it does not crash the program somewhere random: it crashes the very first instruction that uses the bad address, and the fault status registers name the cause precisely (INVSTATE), which is why a fault decoder is the first tool to build.\n",
+    "hidden_symptom": "The board never prints 'boot ok'; the only output is a HardFault dump."
+  },
+  "config": {
+    "seed": 1,
+    "cpu_hz": 150000000,
+    "profile": "arm_like",
+    "max_cycles": 20000,
+    "xip_cache_enabled": true,
+    "xip_miss_penalty": 20
+  },
+  "options": {},
+  "image_map": {
+    "vector_base": "0x10000000",
+    "initial_sp": "0x20082000",
+    "vectors": [
+      {
+        "index": 0,
+        "name": "initial MSP",
+        "value": "0x20082000"
+      },
+      {
+        "index": 1,
+        "name": "Reset",
+        "value": "0x10000100"
+      },
+      {
+        "index": 2,
+        "name": "NMI",
+        "value": "0x10000161"
+      },
+      {
+        "index": 3,
+        "name": "HardFault",
+        "value": "0x100001D9"
+      },
+      {
+        "index": 4,
+        "name": "MemManage",
+        "value": "0x100001D9"
+      },
+      {
+        "index": 5,
+        "name": "BusFault",
+        "value": "0x100001D9"
+      },
+      {
+        "index": 6,
+        "name": "UsageFault",
+        "value": "0x100001D9"
+      },
+      {
+        "index": 11,
+        "name": "SVCall",
+        "value": "0x10000161"
+      },
+      {
+        "index": 12,
+        "name": "DebugMonitor",
+        "value": "0x10000161"
+      },
+      {
+        "index": 14,
+        "name": "PendSV",
+        "value": "0x10000161"
+      },
+      {
+        "index": 15,
+        "name": "SysTick",
+        "value": "0x10000161"
+      },
+      {
+        "index": 16,
+        "name": "IRQ_TIMER0",
+        "value": "0x10000161"
+      },
+      {
+        "index": 17,
+        "name": "IRQ1",
+        "value": "0x10000161"
+      },
+      {
+        "index": 18,
+        "name": "IRQ2",
+        "value": "0x10000161"
+      },
+      {
+        "index": 19,
+        "name": "IRQ3",
+        "value": "0x10000161"
+      },
+      {
+        "index": 20,
+        "name": "IRQ4",
+        "value": "0x10000161"
+      },
+      {
+        "index": 21,
+        "name": "IRQ5",
+        "value": "0x10000161"
+      },
+      {
+        "index": 22,
+        "name": "IRQ6",
+        "value": "0x10000161"
+      },
+      {
+        "index": 23,
+        "name": "IRQ7",
+        "value": "0x10000161"
+      }
+    ],
+    "sections": [
+      {
+        "name": "startup",
+        "region": "flash",
+        "base": "0x10000100",
+        "words": 24
+      },
+      {
+        "name": "default_handler",
+        "region": "flash",
+        "base": "0x10000160",
+        "words": 2
+      },
+      {
+        "name": "main",
+        "region": "flash",
+        "base": "0x10000168",
+        "words": 28
+      },
+      {
+        "name": "faults",
+        "region": "flash",
+        "base": "0x100001D8",
+        "words": 2
+      }
+    ],
+    "data": {
+      "greeting_len": "0x20000000"
+    },
+    "bss": {
+      "counter": "0x20000004"
+    },
+    "reserved": {},
+    "data_load": "0x100001E0"
+  },
+  "events": [
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P14: HardFault at reset - the reset vector is missing the Thumb bit",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P14",
+        "variant": null,
+        "faults": [
+          "vector_thumb_bit_missing: A vector table entry has bit 0 clear: the handler starts with xPSR.T=0 and faults INVSTATE. {'exception': 1}"
+        ],
+        "options": {}
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main",
+          "faults"
+        ],
+        "data_words": 1,
+        "bss_words": 1
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000100 -> PC=0x10000100, xPSR.T=0  [reset vector has bit 0 clear (Thumb bit missing): the first instruction will raise UsageFault INVSTATE]",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": false,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435712,
+        "problems": [
+          "reset vector has bit 0 clear (Thumb bit missing): the first instruction will raise UsageFault INVSTATE"
+        ]
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "cpu",
+      "kind": "fault",
+      "from": "boot",
+      "to": "ISR:HardFault",
+      "ctx": "boot",
+      "reason": "UsageFault INVSTATE at PC=0x10000100 ((never decoded: xPSR.T=0) kcall \"boot:reset_handler\"): execution with xPSR.T=0 at 0x10000100: the address that was loaded into the PC had bit 0 clear (a vector table entry or branch target without the Thumb bit) -> escalated to HardFault (its handler is disabled in SHCSR)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000100",
+        "xpsr": "0x00000000"
+      },
+      "details": {
+        "fault": {
+          "kind": "HardFault",
+          "flag": "INVSTATE",
+          "reason": "INVSTATE: invalid state: executed with the Thumb bit clear (vector or branch target without bit 0); execution with xPSR.T=0 at 0x10000100: the address that was loaded into the PC had bit 0 clear (a vector table entry or branch target without the Thumb bit)",
+          "detail": "execution with xPSR.T=0 at 0x10000100: the address that was loaded into the PC had bit 0 clear (a vector table entry or branch target without the Thumb bit)",
+          "address": null,
+          "pc": "0x10000100",
+          "instruction": "(never decoded: xPSR.T=0) kcall \"boot:reset_handler\"",
+          "context": "boot",
+          "privileged": true,
+          "sp": "msp=0x20082000",
+          "stacked_frame": null,
+          "exc_return": null,
+          "cfsr": {
+            "UFSR": [
+              "INVSTATE"
+            ],
+            "HFSR": [
+              "FORCED"
+            ]
+          },
+          "cfsr_value": "0x00020000",
+          "hfsr_value": "0x40000000",
+          "mmfar": null,
+          "bfar": null,
+          "decoded": [
+            {
+              "register": "UFSR",
+              "bit": 17,
+              "name": "INVSTATE",
+              "meaning": "invalid state: executed with the Thumb bit clear (vector or branch target without bit 0)"
+            },
+            {
+              "register": "HFSR",
+              "bit": 30,
+              "name": "FORCED",
+              "meaning": "a configurable fault was escalated to HardFault (its handler is disabled or its priority could not pre-empt); look at CFSR for the original cause"
+            }
+          ],
+          "escalated_from": "UsageFault",
+          "stacking_failed": false,
+          "t_cycles": 0
+        },
+        "fault_index": 0,
+        "pc": "0x10000100"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 12,
+      "t_us": 0.08,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "boot",
+      "to": "ISR:HardFault",
+      "ctx": "ISR:HardFault",
+      "reason": "HardFault taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[3]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001D8",
+        "xpsr": "0x01000003"
+      },
+      "details": {
+        "exception": 3,
+        "name": "HardFault",
+        "handler": "0x100001D8",
+        "vector": "0x100001D9",
+        "exc_return": "0xFFFFFFF9",
+        "priority": -1,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x00000000",
+          "r1": "0x00000000",
+          "r2": "0x00000000",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0xFFFFFFFF",
+          "pc": "0x10000100",
+          "xpsr": "0x00000000"
+        },
+        "pc": "0x100001D8"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 12,
+      "t_us": 0.08,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:HardFault",
+      "reason": "UART line: '*** HardFault ***'",
+      "regs": {
+        "pc": "0x100001DC"
+      },
+      "details": {
+        "text": "*** HardFault ***"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 12,
+      "t_us": 0.08,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:HardFault",
+      "reason": "UART line: 'CFSR=0x00020000 HFSR=0x40000000 MMFAR=0x00000000 BFAR=0x00000000'",
+      "regs": {},
+      "details": {
+        "text": "CFSR=0x00020000 HFSR=0x40000000 MMFAR=0x00000000 BFAR=0x00000000"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 12,
+      "t_us": 0.08,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:HardFault",
+      "reason": "UART line: '  UFSR.INVSTATE'",
+      "regs": {},
+      "details": {
+        "text": "  UFSR.INVSTATE"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 12,
+      "t_us": 0.08,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:HardFault",
+      "reason": "UART line: '  HFSR.FORCED'",
+      "regs": {},
+      "details": {
+        "text": "  HFSR.FORCED"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 12,
+      "t_us": 0.08,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:HardFault",
+      "reason": "UART line: 'EXC_RETURN=0xFFFFFFF9 frame@0x20081FE0'",
+      "regs": {},
+      "details": {
+        "text": "EXC_RETURN=0xFFFFFFF9 frame@0x20081FE0"
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 12,
+      "t_us": 0.08,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:HardFault",
+      "reason": "UART line: 'PC=0x10000100 LR=0xFFFFFFFF xPSR=0x00000000'",
+      "regs": {},
+      "details": {
+        "text": "PC=0x10000100 LR=0xFFFFFFFF xPSR=0x00000000"
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 32,
+      "t_us": 0.213,
+      "unit": "cpu",
+      "kind": "halt",
+      "from": "ISR:HardFault",
+      "to": "HALT",
+      "ctx": "ISR:HardFault",
+      "reason": "halt instruction executed (end of program)",
+      "regs": {
+        "pc": "0x100001E0"
+      },
+      "details": {
+        "pc": "0x100001E0"
+      }
+    }
+  ],
+  "summary": {
+    "variant": null,
+    "profile": "arm_like",
+    "stop_reason": "halt instruction",
+    "halted": true,
+    "lockup": false,
+    "cycles": 32,
+    "time_us": 0.213,
+    "instructions_executed": 3,
+    "instret": 0,
+    "cpi": null,
+    "exception_entries": 1,
+    "tail_chains": 0,
+    "wfi_sleeps": 0,
+    "critical_sections": {
+      "count": 0,
+      "longest_cycles": 0
+    },
+    "ignored_privileged_ops": 0,
+    "fault_registers": {
+      "CFSR": "0x00020000",
+      "HFSR": "0x40000000",
+      "MMFAR": "0x00000000",
+      "BFAR": "0x00000000"
+    },
+    "boot_steps": [
+      {
+        "step": "power_on",
+        "ok": true,
+        "t_cycles": 0,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main",
+          "faults"
+        ],
+        "data_words": 1,
+        "bss_words": 1
+      },
+      {
+        "step": "vector_table",
+        "ok": false,
+        "t_cycles": 0,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435712,
+        "problems": [
+          "reset vector has bit 0 clear (Thumb bit missing): the first instruction will raise UsageFault INVSTATE"
+        ]
+      }
+    ],
+    "faults": [
+      {
+        "kind": "HardFault",
+        "flag": "INVSTATE",
+        "reason": "INVSTATE: invalid state: executed with the Thumb bit clear (vector or branch target without bit 0); execution with xPSR.T=0 at 0x10000100: the address that was loaded into the PC had bit 0 clear (a vector table entry or branch target without the Thumb bit)",
+        "detail": "execution with xPSR.T=0 at 0x10000100: the address that was loaded into the PC had bit 0 clear (a vector table entry or branch target without the Thumb bit)",
+        "address": null,
+        "pc": "0x10000100",
+        "instruction": "(never decoded: xPSR.T=0) kcall \"boot:reset_handler\"",
+        "context": "boot",
+        "privileged": true,
+        "sp": "msp=0x20082000",
+        "stacked_frame": {
+          "r0": "0x00000000",
+          "r1": "0x00000000",
+          "r2": "0x00000000",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0xFFFFFFFF",
+          "pc": "0x10000100",
+          "xpsr": "0x00000000"
+        },
+        "exc_return": "0xFFFFFFF9",
+        "cfsr": {
+          "UFSR": [
+            "INVSTATE"
+          ],
+          "HFSR": [
+            "FORCED"
+          ]
+        },
+        "cfsr_value": "0x00020000",
+        "hfsr_value": "0x40000000",
+        "mmfar": null,
+        "bfar": null,
+        "decoded": [
+          {
+            "register": "UFSR",
+            "bit": 17,
+            "name": "INVSTATE",
+            "meaning": "invalid state: executed with the Thumb bit clear (vector or branch target without bit 0)"
+          },
+          {
+            "register": "HFSR",
+            "bit": 30,
+            "name": "FORCED",
+            "meaning": "a configurable fault was escalated to HardFault (its handler is disabled or its priority could not pre-empt); look at CFSR for the original cause"
+          }
+        ],
+        "escalated_from": "UsageFault",
+        "stacking_failed": false,
+        "t_cycles": 0
+      }
+    ],
+    "uart_output": "*** HardFault ***\nCFSR=0x00020000 HFSR=0x40000000 MMFAR=0x00000000 BFAR=0x00000000\n  UFSR.INVSTATE\n  HFSR.FORCED\nEXC_RETURN=0xFFFFFFF9 frame@0x20081FE0\nPC=0x10000100 LR=0xFFFFFFFF xPSR=0x00000000\n",
+    "uart_lines": [
+      "*** HardFault ***",
+      "CFSR=0x00020000 HFSR=0x40000000 MMFAR=0x00000000 BFAR=0x00000000",
+      "  UFSR.INVSTATE",
+      "  HFSR.FORCED",
+      "EXC_RETURN=0xFFFFFFF9 frame@0x20081FE0",
+      "PC=0x10000100 LR=0xFFFFFFFF xPSR=0x00000000"
+    ],
+    "gpio_toggles": {},
+    "xip_cache": {
+      "hits": 1,
+      "misses": 1,
+      "enabled": true
+    },
+    "memory_accesses": {
+      "FLASH": 2,
+      "SRAM": 8,
+      "PERIPH": 196,
+      "PPB": 0
+    },
+    "cycles_by_context": {
+      "ISR:HardFault": 32
+    },
+    "final_registers": {
+      "r0": "0x00000000",
+      "r1": "0x00000000",
+      "r2": "0x00000000",
+      "r3": "0x00000000",
+      "r4": "0x00000000",
+      "r5": "0x00000000",
+      "r6": "0x00000000",
+      "r7": "0x00000000",
+      "r8": "0x00000000",
+      "r9": "0x00000000",
+      "r10": "0x00000000",
+      "r11": "0x00000000",
+      "r12": "0x00000000",
+      "sp": "0x20081FE0",
+      "msp": "0x20081FE0",
+      "psp": "0x00000000",
+      "lr": "0xFFFFFFF9",
+      "pc": "0x100001E0",
+      "xpsr": "0x01000003",
+      "control": 0,
+      "primask": 0,
+      "mode": "handler",
+      "privileged": true,
+      "sp_sel": "msp"
+    },
+    "systick_ticks": 0,
+    "globals": {
+      "greeting_len": 577090037,
+      "counter": 2444712010
+    },
+    "markers": [],
+    "faults_injected": [
+      "vector_thumb_bit_missing: A vector table entry has bit 0 clear: the handler starts with xPSR.T=0 and faults INVSTATE. {'exception': 1}"
+    ],
+    "options": {},
+    "cycles_to_main": null,
+    "measurements": []
+  },
+  "variants": [],
+  "result": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "boot_step",
+        "passed": true,
+        "detail": "vector_table: ok=False",
+        "variant": null,
+        "args": {
+          "step": "vector_table",
+          "ok": false
+        }
+      },
+      {
+        "name": "boot_problem_contains",
+        "passed": true,
+        "detail": "reset vector has bit 0 clear (Thumb bit missing): the first instruction will raise UsageFault INVSTATE",
+        "variant": null,
+        "args": {
+          "text": "Thumb bit missing"
+        }
+      },
+      {
+        "name": "no_event",
+        "passed": true,
+        "detail": "0 x boot_step",
+        "variant": null,
+        "args": {
+          "kind": "boot_step",
+          "to": "reset_handler"
+        }
+      },
+      {
+        "name": "fault_kind",
+        "passed": true,
+        "detail": "HardFault",
+        "variant": null,
+        "args": {
+          "kind": "HardFault"
+        }
+      },
+      {
+        "name": "fault_flag",
+        "passed": true,
+        "detail": "HardFault:INVSTATE",
+        "variant": null,
+        "args": {
+          "flag": "INVSTATE"
+        }
+      },
+      {
+        "name": "fault_escalated_from",
+        "passed": true,
+        "detail": "UsageFault",
+        "variant": null,
+        "args": {
+          "kind": "UsageFault"
+        }
+      },
+      {
+        "name": "fault_count",
+        "passed": true,
+        "detail": "1 fault(s)",
+        "variant": null,
+        "args": {
+          "count": 1
+        }
+      },
+      {
+        "name": "uart_contains",
+        "passed": true,
+        "detail": "'*** HardFault ***\\nCFSR=0x00020000 HFSR=0x40000000 MMFAR=0x00000000 BFAR=0x00000000\\n  UFSR.INVSTATE\\n  HFSR.FORCED\\nEXC_RET'",
+        "variant": null,
+        "args": {
+          "text": "*** HardFault ***"
+        }
+      },
+      {
+        "name": "uart_contains",
+        "passed": true,
+        "detail": "'*** HardFault ***\\nCFSR=0x00020000 HFSR=0x40000000 MMFAR=0x00000000 BFAR=0x00000000\\n  UFSR.INVSTATE\\n  HFSR.FORCED\\nEXC_RET'",
+        "variant": null,
+        "args": {
+          "text": "UFSR.INVSTATE"
+        }
+      },
+      {
+        "name": "uart_not_contains",
+        "passed": true,
+        "detail": "'*** HardFault ***\\nCFSR=0x00020000 HFSR=0x40000000 MMFAR=0x00000000 BFAR=0x00000000\\n  UFSR.INVSTATE\\n  HFSR.FORCED\\nEXC_RET'",
+        "variant": null,
+        "args": {
+          "text": "boot ok"
+        }
+      },
+      {
+        "name": "lockup",
+        "passed": true,
+        "detail": "lockup=False",
+        "variant": null,
+        "args": {
+          "value": false
+        }
+      }
+    ]
+  }
+}

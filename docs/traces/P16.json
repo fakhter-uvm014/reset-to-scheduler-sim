@@ -1,0 +1,5522 @@
+{
+  "scenario": {
+    "id": "P16",
+    "title": "SysTick period - off-by-one reload and a wrong clock assumption",
+    "layer": "3 Drivers",
+    "description": "A bare-metal program programs SysTick for a 1 ms tick and measures ten tick periods twice: with the core cycle counter (DWT CYCCNT) and with the 1 MHz system timer (TIMERAWL), which runs from its own reference and does not depend on the core clock. Three variants. \"correct\": RVR = 150000 - 1 for a 150 MHz core. \"off_by_one\": RVR = 150000, so every period is 150001 cycles. \"wrong_clock\": the reload is computed for 150 MHz, but the core is still running at 12 MHz (the clock setup was skipped), so each tick takes 12.5 times longer in real time while looking perfect in cycles.\n",
+    "program": "tick",
+    "options": {
+      "tick_us": 1000
+    },
+    "config": {
+      "seed": 1,
+      "max_cycles": 2000000
+    },
+    "variants": [
+      {
+        "name": "correct"
+      },
+      {
+        "name": "off_by_one",
+        "hidden_symptom": "A 1 ms software clock runs slightly slow: it lags by about half a second per day.",
+        "faults": [
+          {
+            "type": "systick_reload_off_by_one"
+          }
+        ]
+      },
+      {
+        "name": "wrong_clock",
+        "hidden_symptom": "The scheduler tick looks right when counted in CPU cycles, but on the scope every period is 12.5 times too long.",
+        "faults": [
+          {
+            "type": "wrong_clock_assumption",
+            "assumed_hz": 150000000,
+            "actual_hz": 12000000
+          }
+        ]
+      }
+    ],
+    "expected": {
+      "summary": "correct gives 150000 cycles and 1000 us per tick; off_by_one gives 150001 cycles per tick; wrong_clock gives 150000 cycles but 12500 us per tick.",
+      "checks": [
+        {
+          "check": "no_faults",
+          "variant": "correct"
+        },
+        {
+          "check": "metric_equals",
+          "variant": "correct",
+          "metric": "tick.period_cycles",
+          "value": 150000
+        },
+        {
+          "check": "metric_equals",
+          "variant": "correct",
+          "metric": "tick.period_us",
+          "value": 1000
+        },
+        {
+          "check": "metric_equals",
+          "variant": "off_by_one",
+          "metric": "tick.period_cycles",
+          "value": 150001
+        },
+        {
+          "check": "metric_equals",
+          "variant": "wrong_clock",
+          "metric": "tick.period_cycles",
+          "value": 150000
+        },
+        {
+          "check": "metric_between",
+          "variant": "wrong_clock",
+          "metric": "tick.period_us",
+          "min": 12400,
+          "max": 12600
+        }
+      ]
+    },
+    "what_to_look_for": "The program times ticks 2 to 12, not 1 to 11: the first SysTick handler runs from a cold XIP cache and reads CYCCNT about 20 cycles later than the others, which would bias the result (a real effect worth seeing once: run \"r2s run P16 --trace --kinds exception_entry,exception_return\" and compare the first handler's duration with the second's). Then read the UART lines \"10 ticks: cycles=\" and \"10 ticks: us=\" in each variant, and summary.variants.<name>.tick (also in the measurements table). correct: 1500000 cycles and 10000 us. off_by_one: 1500010 cycles. One extra cycle at 150 MHz is about 6.7 ns per tick, 0.07 us over the 10 measured ticks, so the 1 MHz timer still reads 10000 us: invisible in a short test, but about 0.58 s per day at 1000 ticks per second. wrong_clock: 1500000 cycles (the cycle count cannot see the problem, it is counted in the wrong unit) but 125000 us. The irq_pend SysTick events are spaced 150000 or 150001 cycles apart; the t_us column of the trace uses the model's clock, so in wrong_clock the ticks are 12.5 ms apart.\n",
+    "likely_root_causes": [
+      "RVR loaded with the period instead of period - 1: SysTick counts RVR..0, so the period is RVR + 1 cycles.",
+      "The reload computed for the final PLL frequency while the core still runs from the crystal or ring oscillator (clock setup skipped, failed, or done after SysTick setup).",
+      "CLKSOURCE (SYST_CSR bit 2) selecting the external reference instead of the processor clock, or the reverse, so the tick runs at a different rate than the formula assumes.",
+      "A reload larger than 24 bits (0xFFFFFF) silently truncated by the hardware."
+    ],
+    "how_to_debug": [
+      "Time ten ticks with two independent clocks (CYCCNT and the 1 MHz timer, or a GPIO toggle on the scope). If cycles look right but time does not, the clock frequency is wrong; if both are off by a constant, the reload is wrong.",
+      "Read back SYST_RVR (0xE000E014) and SYST_CSR (0xE000E010) in GDB and redo the arithmetic: period = (RVR + 1) / f_clk.",
+      "Check the real core frequency: toggle a pin in a loop of known cycle count and measure it on the scope, or read the clock registers.",
+      "Convert every cycle measurement to time with the clock you measured, not the clock you intended."
+    ],
+    "what_this_means": "A timer period is a count times a clock period, and both can be wrong independently. Counting in cycles confirms the count; only a second, independent time base confirms the clock. That is why the course asks for every on-chip number to be cross-checked on the oscilloscope.\n",
+    "hidden_symptom": "The scheduler tick looks right in the debugger, but task periods measured on the scope are 12.5 times too long (or drift slowly)."
+  },
+  "config": {
+    "seed": 1,
+    "cpu_hz": 150000000,
+    "profile": "arm_like",
+    "max_cycles": 2000000,
+    "xip_cache_enabled": true,
+    "xip_miss_penalty": 20
+  },
+  "options": {
+    "tick_us": 1000
+  },
+  "image_map": {
+    "vector_base": "0x10000000",
+    "initial_sp": "0x20082000",
+    "vectors": [
+      {
+        "index": 0,
+        "name": "initial MSP",
+        "value": "0x20082000"
+      },
+      {
+        "index": 1,
+        "name": "Reset",
+        "value": "0x10000101"
+      },
+      {
+        "index": 2,
+        "name": "NMI",
+        "value": "0x10000161"
+      },
+      {
+        "index": 3,
+        "name": "HardFault",
+        "value": "0x10000239"
+      },
+      {
+        "index": 4,
+        "name": "MemManage",
+        "value": "0x10000239"
+      },
+      {
+        "index": 5,
+        "name": "BusFault",
+        "value": "0x10000239"
+      },
+      {
+        "index": 6,
+        "name": "UsageFault",
+        "value": "0x10000239"
+      },
+      {
+        "index": 11,
+        "name": "SVCall",
+        "value": "0x10000161"
+      },
+      {
+        "index": 12,
+        "name": "DebugMonitor",
+        "value": "0x10000161"
+      },
+      {
+        "index": 14,
+        "name": "PendSV",
+        "value": "0x10000161"
+      },
+      {
+        "index": 15,
+        "name": "SysTick",
+        "value": "0x100001E5"
+      },
+      {
+        "index": 16,
+        "name": "IRQ_TIMER0",
+        "value": "0x10000161"
+      },
+      {
+        "index": 17,
+        "name": "IRQ1",
+        "value": "0x10000161"
+      },
+      {
+        "index": 18,
+        "name": "IRQ2",
+        "value": "0x10000161"
+      },
+      {
+        "index": 19,
+        "name": "IRQ3",
+        "value": "0x10000161"
+      },
+      {
+        "index": 20,
+        "name": "IRQ4",
+        "value": "0x10000161"
+      },
+      {
+        "index": 21,
+        "name": "IRQ5",
+        "value": "0x10000161"
+      },
+      {
+        "index": 22,
+        "name": "IRQ6",
+        "value": "0x10000161"
+      },
+      {
+        "index": 23,
+        "name": "IRQ7",
+        "value": "0x10000161"
+      }
+    ],
+    "sections": [
+      {
+        "name": "startup",
+        "region": "flash",
+        "base": "0x10000100",
+        "words": 24
+      },
+      {
+        "name": "default_handler",
+        "region": "flash",
+        "base": "0x10000160",
+        "words": 2
+      },
+      {
+        "name": "main",
+        "region": "flash",
+        "base": "0x10000168",
+        "words": 52
+      },
+      {
+        "name": "faults",
+        "region": "flash",
+        "base": "0x10000238",
+        "words": 2
+      }
+    ],
+    "data": {
+      "reload_value": "0x20000000"
+    },
+    "bss": {
+      "ticks": "0x20000004",
+      "t_start_cycles": "0x20000008",
+      "t_end_cycles": "0x2000000C",
+      "t_start_us": "0x20000010",
+      "t_end_us": "0x20000014"
+    },
+    "reserved": {},
+    "data_load": "0x10000240"
+  },
+  "events": [
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P16 variant correct: SysTick period - off-by-one reload and a wrong clock assumption",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P16",
+        "variant": "correct",
+        "faults": [],
+        "options": {
+          "tick_us": 1000
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main",
+          "faults"
+        ],
+        "data_words": 1,
+        "bss_words": 5,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": [],
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 79,
+      "t_us": 0.527,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 1 word(s) copied from flash 0x10000240 to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x10000244",
+        "r1": "0x20000004",
+        "r2": "0x20000004",
+        "r3": "0x000249EF",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": [],
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 142,
+      "t_us": 0.947,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss zeroed: 5 word(s) at 0x20000004..0x20000018 are 0",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x20000018",
+        "r2": "0x20000018",
+        "pc": "0x10000154"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": true,
+        "nonzero": [],
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 142,
+      "t_us": 0.947,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 142 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000158"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 205,
+      "t_us": 1.367,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'tick test'",
+      "regs": {
+        "r0": "0xE000E010",
+        "r1": "0x00000007",
+        "lr": "0x1000015D",
+        "pc": "0x10000194"
+      },
+      "details": {
+        "text": "tick test",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 245,
+      "t_us": 1.633,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149957 cycles until the next event",
+      "regs": {
+        "pc": "0x10000198"
+      },
+      "details": {
+        "skip_cycles": 149957,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 150203,
+      "t_us": 1001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 150215,
+      "t_us": 1001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x6100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0xE000E010",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 150311,
+      "t_us": 1002.073,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0xE000E010",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 12,
+      "t_cycles": 150338,
+      "t_us": 1002.253,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149864 cycles until the next event",
+      "regs": {
+        "r0": "0x20000004",
+        "r1": "0x00000001",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "skip_cycles": 149864,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 13,
+      "t_cycles": 300203,
+      "t_us": 2001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 14,
+      "t_cycles": 300215,
+      "t_us": 2001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000001",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 15,
+      "t_cycles": 300258,
+      "t_us": 2001.72,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000001",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 16,
+      "t_cycles": 300265,
+      "t_us": 2001.767,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149937 cycles until the next event",
+      "regs": {
+        "r1": "0x00000002"
+      },
+      "details": {
+        "skip_cycles": 149937,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 17,
+      "t_cycles": 450203,
+      "t_us": 3001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 18,
+      "t_cycles": 450215,
+      "t_us": 3001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000002",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 19,
+      "t_cycles": 450251,
+      "t_us": 3001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000002",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 20,
+      "t_cycles": 450258,
+      "t_us": 3001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000003"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 21,
+      "t_cycles": 600203,
+      "t_us": 4001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 22,
+      "t_cycles": 600215,
+      "t_us": 4001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000003",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 23,
+      "t_cycles": 600251,
+      "t_us": 4001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000003",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 24,
+      "t_cycles": 600258,
+      "t_us": 4001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000004"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 25,
+      "t_cycles": 750203,
+      "t_us": 5001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 26,
+      "t_cycles": 750215,
+      "t_us": 5001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000004",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 27,
+      "t_cycles": 750251,
+      "t_us": 5001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000004",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 28,
+      "t_cycles": 750258,
+      "t_us": 5001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000005"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 29,
+      "t_cycles": 900203,
+      "t_us": 6001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 30,
+      "t_cycles": 900215,
+      "t_us": 6001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000005",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 31,
+      "t_cycles": 900251,
+      "t_us": 6001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000005",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 32,
+      "t_cycles": 900258,
+      "t_us": 6001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000006"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 33,
+      "t_cycles": 1050203,
+      "t_us": 7001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 34,
+      "t_cycles": 1050215,
+      "t_us": 7001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000006",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 35,
+      "t_cycles": 1050251,
+      "t_us": 7001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000006",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 36,
+      "t_cycles": 1050258,
+      "t_us": 7001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000007"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 37,
+      "t_cycles": 1200203,
+      "t_us": 8001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 38,
+      "t_cycles": 1200215,
+      "t_us": 8001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 39,
+      "t_cycles": 1200251,
+      "t_us": 8001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 40,
+      "t_cycles": 1200258,
+      "t_us": 8001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000008"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 41,
+      "t_cycles": 1350203,
+      "t_us": 9001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 42,
+      "t_cycles": 1350215,
+      "t_us": 9001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000008",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 43,
+      "t_cycles": 1350251,
+      "t_us": 9001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000008",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 44,
+      "t_cycles": 1350258,
+      "t_us": 9001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000009"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 45,
+      "t_cycles": 1500203,
+      "t_us": 10001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 46,
+      "t_cycles": 1500215,
+      "t_us": 10001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000009",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 47,
+      "t_cycles": 1500251,
+      "t_us": 10001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000009",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 48,
+      "t_cycles": 1500258,
+      "t_us": 10001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x0000000A"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 49,
+      "t_cycles": 1650203,
+      "t_us": 11001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 50,
+      "t_cycles": 1650215,
+      "t_us": 11001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000A",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 51,
+      "t_cycles": 1650251,
+      "t_us": 11001.673,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000A",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 52,
+      "t_cycles": 1650258,
+      "t_us": 11001.72,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x0000000B"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 53,
+      "t_cycles": 1800203,
+      "t_us": 12001.353,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 54,
+      "t_cycles": 1800215,
+      "t_us": 12001.433,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000B",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 55,
+      "t_cycles": 1800258,
+      "t_us": 12001.72,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000B",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 56,
+      "t_cycles": 1800341,
+      "t_us": 12002.273,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: '10 ticks: cycles=1500000'",
+      "regs": {
+        "r0": "0x0016E360",
+        "r1": "0x000494C0",
+        "r2": "0x001B7820",
+        "pc": "0x100001C4",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "text": "10 ticks: cycles=1500000",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 57,
+      "t_cycles": 1800422,
+      "t_us": 12002.813,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: '10 ticks: us=10000'",
+      "regs": {
+        "r0": "0x00002710",
+        "r1": "0x000007D1",
+        "r2": "0x00002EE1",
+        "pc": "0x100001E0"
+      },
+      "details": {
+        "text": "10 ticks: us=10000",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 58,
+      "t_cycles": 1800422,
+      "t_us": 12002.813,
+      "unit": "cpu",
+      "kind": "halt",
+      "from": "main",
+      "to": "HALT",
+      "ctx": "main",
+      "reason": "halt instruction executed (end of program)",
+      "regs": {
+        "pc": "0x100001E4"
+      },
+      "details": {
+        "pc": "0x100001E4",
+        "variant": "correct"
+      }
+    },
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P16 variant off_by_one: SysTick period - off-by-one reload and a wrong clock assumption",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P16",
+        "variant": "off_by_one",
+        "faults": [
+          "systick_reload_off_by_one: SYST_RVR is loaded with N instead of N-1: every tick is one cycle too long."
+        ],
+        "options": {
+          "tick_us": 1000,
+          "reload_off_by_one": true
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main",
+          "faults"
+        ],
+        "data_words": 1,
+        "bss_words": 5,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": [],
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 79,
+      "t_us": 0.527,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 1 word(s) copied from flash 0x10000240 to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x10000244",
+        "r1": "0x20000004",
+        "r2": "0x20000004",
+        "r3": "0x000249F0",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": [],
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 142,
+      "t_us": 0.947,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss zeroed: 5 word(s) at 0x20000004..0x20000018 are 0",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x20000018",
+        "r2": "0x20000018",
+        "pc": "0x10000154"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": true,
+        "nonzero": [],
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 142,
+      "t_us": 0.947,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 142 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000158"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 205,
+      "t_us": 1.367,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'tick test'",
+      "regs": {
+        "r0": "0xE000E010",
+        "r1": "0x00000007",
+        "lr": "0x1000015D",
+        "pc": "0x10000194"
+      },
+      "details": {
+        "text": "tick test",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 245,
+      "t_us": 1.633,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149958 cycles until the next event",
+      "regs": {
+        "pc": "0x10000198"
+      },
+      "details": {
+        "skip_cycles": 149958,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 150204,
+      "t_us": 1001.36,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 150216,
+      "t_us": 1001.44,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x6100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0xE000E010",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 150312,
+      "t_us": 1002.08,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0xE000E010",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 12,
+      "t_cycles": 150339,
+      "t_us": 1002.26,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149865 cycles until the next event",
+      "regs": {
+        "r0": "0x20000004",
+        "r1": "0x00000001",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "skip_cycles": 149865,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 13,
+      "t_cycles": 300205,
+      "t_us": 2001.367,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 14,
+      "t_cycles": 300217,
+      "t_us": 2001.447,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000001",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 15,
+      "t_cycles": 300260,
+      "t_us": 2001.733,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000001",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 16,
+      "t_cycles": 300267,
+      "t_us": 2001.78,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149938 cycles until the next event",
+      "regs": {
+        "r1": "0x00000002"
+      },
+      "details": {
+        "skip_cycles": 149938,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 17,
+      "t_cycles": 450206,
+      "t_us": 3001.373,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 18,
+      "t_cycles": 450218,
+      "t_us": 3001.453,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000002",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 19,
+      "t_cycles": 450254,
+      "t_us": 3001.693,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000002",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 20,
+      "t_cycles": 450261,
+      "t_us": 3001.74,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x00000003"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 21,
+      "t_cycles": 600207,
+      "t_us": 4001.38,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 22,
+      "t_cycles": 600219,
+      "t_us": 4001.46,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000003",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 23,
+      "t_cycles": 600255,
+      "t_us": 4001.7,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000003",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 24,
+      "t_cycles": 600262,
+      "t_us": 4001.747,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x00000004"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 25,
+      "t_cycles": 750208,
+      "t_us": 5001.387,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 26,
+      "t_cycles": 750220,
+      "t_us": 5001.467,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000004",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 27,
+      "t_cycles": 750256,
+      "t_us": 5001.707,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000004",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 28,
+      "t_cycles": 750263,
+      "t_us": 5001.753,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x00000005"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 29,
+      "t_cycles": 900209,
+      "t_us": 6001.393,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 30,
+      "t_cycles": 900221,
+      "t_us": 6001.473,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000005",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 31,
+      "t_cycles": 900257,
+      "t_us": 6001.713,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000005",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 32,
+      "t_cycles": 900264,
+      "t_us": 6001.76,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x00000006"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 33,
+      "t_cycles": 1050210,
+      "t_us": 7001.4,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 34,
+      "t_cycles": 1050222,
+      "t_us": 7001.48,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000006",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 35,
+      "t_cycles": 1050258,
+      "t_us": 7001.72,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000006",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 36,
+      "t_cycles": 1050265,
+      "t_us": 7001.767,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x00000007"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 37,
+      "t_cycles": 1200211,
+      "t_us": 8001.407,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 38,
+      "t_cycles": 1200223,
+      "t_us": 8001.487,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 39,
+      "t_cycles": 1200259,
+      "t_us": 8001.727,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 40,
+      "t_cycles": 1200266,
+      "t_us": 8001.773,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x00000008"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 41,
+      "t_cycles": 1350212,
+      "t_us": 9001.413,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 42,
+      "t_cycles": 1350224,
+      "t_us": 9001.493,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000008",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 43,
+      "t_cycles": 1350260,
+      "t_us": 9001.733,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000008",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 44,
+      "t_cycles": 1350267,
+      "t_us": 9001.78,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x00000009"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 45,
+      "t_cycles": 1500213,
+      "t_us": 10001.42,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 46,
+      "t_cycles": 1500225,
+      "t_us": 10001.5,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000009",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 47,
+      "t_cycles": 1500261,
+      "t_us": 10001.74,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000009",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 48,
+      "t_cycles": 1500268,
+      "t_us": 10001.787,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x0000000A"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 49,
+      "t_cycles": 1650214,
+      "t_us": 11001.427,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 50,
+      "t_cycles": 1650226,
+      "t_us": 11001.507,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000A",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 51,
+      "t_cycles": 1650262,
+      "t_us": 11001.747,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000A",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 52,
+      "t_cycles": 1650269,
+      "t_us": 11001.793,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149945 cycles until the next event",
+      "regs": {
+        "r1": "0x0000000B"
+      },
+      "details": {
+        "skip_cycles": 149945,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 53,
+      "t_cycles": 1800215,
+      "t_us": 12001.433,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 54,
+      "t_cycles": 1800227,
+      "t_us": 12001.513,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000B",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 55,
+      "t_cycles": 1800270,
+      "t_us": 12001.8,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000B",
+          "r2": "0x20000018",
+          "r3": "0x000249F0",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 56,
+      "t_cycles": 1800353,
+      "t_us": 12002.353,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: '10 ticks: cycles=1500010'",
+      "regs": {
+        "r0": "0x0016E36A",
+        "r1": "0x000494C2",
+        "r2": "0x001B782C",
+        "pc": "0x100001C4",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "text": "10 ticks: cycles=1500010",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 57,
+      "t_cycles": 1800434,
+      "t_us": 12002.893,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: '10 ticks: us=10000'",
+      "regs": {
+        "r0": "0x00002710",
+        "r1": "0x000007D1",
+        "r2": "0x00002EE1",
+        "pc": "0x100001E0"
+      },
+      "details": {
+        "text": "10 ticks: us=10000",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 58,
+      "t_cycles": 1800434,
+      "t_us": 12002.893,
+      "unit": "cpu",
+      "kind": "halt",
+      "from": "main",
+      "to": "HALT",
+      "ctx": "main",
+      "reason": "halt instruction executed (end of program)",
+      "regs": {
+        "pc": "0x100001E4"
+      },
+      "details": {
+        "pc": "0x100001E4",
+        "variant": "off_by_one"
+      }
+    },
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P16 variant wrong_clock: SysTick period - off-by-one reload and a wrong clock assumption",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P16",
+        "variant": "wrong_clock",
+        "faults": [
+          "wrong_clock_assumption: The reload is computed for 150 MHz but the core still runs from a slower clock. {'assumed_hz': 150000000, 'actual_hz': 12000000}"
+        ],
+        "options": {
+          "tick_us": 1000,
+          "assumed_hz": 150000000
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main",
+          "faults"
+        ],
+        "data_words": 1,
+        "bss_words": 5,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": [],
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 79,
+      "t_us": 6.583,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 1 word(s) copied from flash 0x10000240 to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x10000244",
+        "r1": "0x20000004",
+        "r2": "0x20000004",
+        "r3": "0x000249EF",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": [],
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 142,
+      "t_us": 11.833,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss zeroed: 5 word(s) at 0x20000004..0x20000018 are 0",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x20000018",
+        "r2": "0x20000018",
+        "pc": "0x10000154"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": true,
+        "nonzero": [],
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 142,
+      "t_us": 11.833,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 142 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000158"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 205,
+      "t_us": 17.083,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'tick test'",
+      "regs": {
+        "r0": "0xE000E010",
+        "r1": "0x00000007",
+        "lr": "0x1000015D",
+        "pc": "0x10000194"
+      },
+      "details": {
+        "text": "tick test",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 245,
+      "t_us": 20.417,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149957 cycles until the next event",
+      "regs": {
+        "pc": "0x10000198"
+      },
+      "details": {
+        "skip_cycles": 149957,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 150203,
+      "t_us": 12516.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 150215,
+      "t_us": 12517.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x6100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0xE000E010",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 150311,
+      "t_us": 12525.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0xE000E010",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 12,
+      "t_cycles": 150338,
+      "t_us": 12528.167,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149864 cycles until the next event",
+      "regs": {
+        "r0": "0x20000004",
+        "r1": "0x00000001",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "skip_cycles": 149864,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 13,
+      "t_cycles": 300203,
+      "t_us": 25016.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 14,
+      "t_cycles": 300215,
+      "t_us": 25017.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000001",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 15,
+      "t_cycles": 300258,
+      "t_us": 25021.5,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000001",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 16,
+      "t_cycles": 300265,
+      "t_us": 25022.083,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149937 cycles until the next event",
+      "regs": {
+        "r1": "0x00000002"
+      },
+      "details": {
+        "skip_cycles": 149937,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 17,
+      "t_cycles": 450203,
+      "t_us": 37516.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 18,
+      "t_cycles": 450215,
+      "t_us": 37517.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000002",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 19,
+      "t_cycles": 450251,
+      "t_us": 37520.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000002",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 20,
+      "t_cycles": 450258,
+      "t_us": 37521.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000003"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 21,
+      "t_cycles": 600203,
+      "t_us": 50016.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 22,
+      "t_cycles": 600215,
+      "t_us": 50017.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000003",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 23,
+      "t_cycles": 600251,
+      "t_us": 50020.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000003",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 24,
+      "t_cycles": 600258,
+      "t_us": 50021.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000004"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 25,
+      "t_cycles": 750203,
+      "t_us": 62516.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 26,
+      "t_cycles": 750215,
+      "t_us": 62517.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000004",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 27,
+      "t_cycles": 750251,
+      "t_us": 62520.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000004",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 28,
+      "t_cycles": 750258,
+      "t_us": 62521.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000005"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 29,
+      "t_cycles": 900203,
+      "t_us": 75016.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 30,
+      "t_cycles": 900215,
+      "t_us": 75017.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000005",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 31,
+      "t_cycles": 900251,
+      "t_us": 75020.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000005",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 32,
+      "t_cycles": 900258,
+      "t_us": 75021.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000006"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 33,
+      "t_cycles": 1050203,
+      "t_us": 87516.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 34,
+      "t_cycles": 1050215,
+      "t_us": 87517.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000006",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 35,
+      "t_cycles": 1050251,
+      "t_us": 87520.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000006",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 36,
+      "t_cycles": 1050258,
+      "t_us": 87521.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000007"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 37,
+      "t_cycles": 1200203,
+      "t_us": 100016.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 38,
+      "t_cycles": 1200215,
+      "t_us": 100017.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 39,
+      "t_cycles": 1200251,
+      "t_us": 100020.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000007",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 40,
+      "t_cycles": 1200258,
+      "t_us": 100021.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000008"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 41,
+      "t_cycles": 1350203,
+      "t_us": 112516.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 42,
+      "t_cycles": 1350215,
+      "t_us": 112517.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000008",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 43,
+      "t_cycles": 1350251,
+      "t_us": 112520.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000008",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 44,
+      "t_cycles": 1350258,
+      "t_us": 112521.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x00000009"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 45,
+      "t_cycles": 1500203,
+      "t_us": 125016.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 46,
+      "t_cycles": 1500215,
+      "t_us": 125017.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000009",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 47,
+      "t_cycles": 1500251,
+      "t_us": 125020.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x00000009",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 48,
+      "t_cycles": 1500258,
+      "t_us": 125021.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x0000000A"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 49,
+      "t_cycles": 1650203,
+      "t_us": 137516.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 50,
+      "t_cycles": 1650215,
+      "t_us": 137517.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000A",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 51,
+      "t_cycles": 1650251,
+      "t_us": 137520.917,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000A",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 52,
+      "t_cycles": 1650258,
+      "t_us": 137521.5,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 149944 cycles until the next event",
+      "regs": {
+        "r1": "0x0000000B"
+      },
+      "details": {
+        "skip_cycles": 149944,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 53,
+      "t_cycles": 1800203,
+      "t_us": 150016.917,
+      "unit": "systick",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "SysTick",
+      "ctx": "main",
+      "reason": "SysTick counter reached zero (tick)",
+      "regs": {},
+      "details": {
+        "exception": 15,
+        "priority": 0,
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 54,
+      "t_cycles": 1800215,
+      "t_us": 150017.917,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:SysTick",
+      "ctx": "ISR:SysTick",
+      "reason": "SysTick taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[15]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001E4",
+        "xpsr": "0x8100000F"
+      },
+      "details": {
+        "exception": 15,
+        "name": "SysTick",
+        "handler": "0x100001E4",
+        "vector": "0x100001E5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 0,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000B",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 55,
+      "t_cycles": 1800258,
+      "t_us": 150021.5,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:SysTick",
+      "to": "main",
+      "ctx": "main",
+      "reason": "SysTick returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x10000198",
+        "xpsr": "0x81000000"
+      },
+      "details": {
+        "exception": 15,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x20000004",
+          "r1": "0x0000000B",
+          "r2": "0x20000018",
+          "r3": "0x000249EF",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x10000198",
+          "xpsr": "0x81000000"
+        },
+        "pc": "0x10000198",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 56,
+      "t_cycles": 1800341,
+      "t_us": 150028.417,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: '10 ticks: cycles=1500000'",
+      "regs": {
+        "r0": "0x0016E360",
+        "r1": "0x000494C0",
+        "r2": "0x001B7820",
+        "pc": "0x100001C4",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "text": "10 ticks: cycles=1500000",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 57,
+      "t_cycles": 1800422,
+      "t_us": 150035.167,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: '10 ticks: us=125000'",
+      "regs": {
+        "r0": "0x0001E848",
+        "r1": "0x000061BB",
+        "r2": "0x00024A03",
+        "pc": "0x100001E0"
+      },
+      "details": {
+        "text": "10 ticks: us=125000",
+        "variant": "wrong_clock"
+      }
+    },
+    {
+      "seq": 58,
+      "t_cycles": 1800422,
+      "t_us": 150035.167,
+      "unit": "cpu",
+      "kind": "halt",
+      "from": "main",
+      "to": "HALT",
+      "ctx": "main",
+      "reason": "halt instruction executed (end of program)",
+      "regs": {
+        "pc": "0x100001E4"
+      },
+      "details": {
+        "pc": "0x100001E4",
+        "variant": "wrong_clock"
+      }
+    }
+  ],
+  "summary": {
+    "variants": {
+      "correct": {
+        "variant": "correct",
+        "profile": "arm_like",
+        "stop_reason": "halt instruction",
+        "halted": true,
+        "lockup": false,
+        "cycles": 1800422,
+        "time_us": 12002.813,
+        "instructions_executed": 297,
+        "instret": 327,
+        "cpi": 5505.878,
+        "exception_entries": 12,
+        "tail_chains": 0,
+        "wfi_sleeps": 12,
+        "critical_sections": {
+          "count": 0,
+          "longest_cycles": 0
+        },
+        "ignored_privileged_ops": 0,
+        "fault_registers": {
+          "CFSR": "0x00000000",
+          "HFSR": "0x00000000",
+          "MMFAR": "0x00000000",
+          "BFAR": "0x00000000"
+        },
+        "boot_steps": [
+          {
+            "step": "power_on",
+            "ok": true,
+            "t_cycles": 0,
+            "image_sections": [
+              "startup",
+              "default_handler",
+              "main",
+              "faults"
+            ],
+            "data_words": 1,
+            "bss_words": 5
+          },
+          {
+            "step": "vector_table",
+            "ok": true,
+            "t_cycles": 0,
+            "vector_base": 268435456,
+            "initial_sp": 537403392,
+            "reset_vector": 268435713,
+            "problems": []
+          },
+          {
+            "step": "reset_handler",
+            "ok": true,
+            "t_cycles": 0
+          },
+          {
+            "step": "data_copied",
+            "ok": true,
+            "t_cycles": 79,
+            "mismatches": []
+          },
+          {
+            "step": "bss_zeroed",
+            "ok": true,
+            "t_cycles": 142,
+            "nonzero": []
+          },
+          {
+            "step": "main_entered",
+            "ok": true,
+            "t_cycles": 142
+          }
+        ],
+        "faults": [],
+        "uart_output": "tick test\n10 ticks: cycles=1500000\n10 ticks: us=10000\n",
+        "uart_lines": [
+          "tick test",
+          "10 ticks: cycles=1500000",
+          "10 ticks: us=10000"
+        ],
+        "gpio_toggles": {},
+        "xip_cache": {
+          "hits": 287,
+          "misses": 11,
+          "enabled": true
+        },
+        "memory_accesses": {
+          "FLASH": 298,
+          "SRAM": 243,
+          "PERIPH": 66,
+          "PPB": 15
+        },
+        "cycles_by_context": {
+          "ISR:SysTick": 530,
+          "boot": 142,
+          "main": 1799750
+        },
+        "final_registers": {
+          "r0": "0x00002710",
+          "r1": "0x000007D1",
+          "r2": "0x00002EE1",
+          "r3": "0x000249EF",
+          "r4": "0x00000000",
+          "r5": "0x00000000",
+          "r6": "0x00000000",
+          "r7": "0x00000000",
+          "r8": "0x00000000",
+          "r9": "0x00000000",
+          "r10": "0x00000000",
+          "r11": "0x00000000",
+          "r12": "0x00000000",
+          "sp": "0x20082000",
+          "msp": "0x20082000",
+          "psp": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x100001E4",
+          "xpsr": "0x61000000",
+          "control": 0,
+          "primask": 0,
+          "mode": "thread",
+          "privileged": true,
+          "sp_sel": "msp"
+        },
+        "systick_ticks": 12,
+        "globals": {
+          "reload_value": 149999,
+          "ticks": 12,
+          "t_start_cycles": 300224,
+          "t_end_cycles": 1800224,
+          "t_start_us": 2001,
+          "t_end_us": 12001
+        },
+        "markers": [],
+        "faults_injected": [],
+        "options": {
+          "tick_us": 1000
+        },
+        "tick": {
+          "reload": 149999,
+          "period_cycles": 150000.0,
+          "period_us": 1000.0,
+          "target_us": 1000,
+          "assumed_hz": 150000000,
+          "actual_hz": 150000000,
+          "ratio_to_target": 1.0
+        },
+        "cycles_to_main": 142
+      },
+      "off_by_one": {
+        "variant": "off_by_one",
+        "profile": "arm_like",
+        "stop_reason": "halt instruction",
+        "halted": true,
+        "lockup": false,
+        "cycles": 1800434,
+        "time_us": 12002.893,
+        "instructions_executed": 297,
+        "instret": 327,
+        "cpi": 5505.914,
+        "exception_entries": 12,
+        "tail_chains": 0,
+        "wfi_sleeps": 12,
+        "critical_sections": {
+          "count": 0,
+          "longest_cycles": 0
+        },
+        "ignored_privileged_ops": 0,
+        "fault_registers": {
+          "CFSR": "0x00000000",
+          "HFSR": "0x00000000",
+          "MMFAR": "0x00000000",
+          "BFAR": "0x00000000"
+        },
+        "boot_steps": [
+          {
+            "step": "power_on",
+            "ok": true,
+            "t_cycles": 0,
+            "image_sections": [
+              "startup",
+              "default_handler",
+              "main",
+              "faults"
+            ],
+            "data_words": 1,
+            "bss_words": 5
+          },
+          {
+            "step": "vector_table",
+            "ok": true,
+            "t_cycles": 0,
+            "vector_base": 268435456,
+            "initial_sp": 537403392,
+            "reset_vector": 268435713,
+            "problems": []
+          },
+          {
+            "step": "reset_handler",
+            "ok": true,
+            "t_cycles": 0
+          },
+          {
+            "step": "data_copied",
+            "ok": true,
+            "t_cycles": 79,
+            "mismatches": []
+          },
+          {
+            "step": "bss_zeroed",
+            "ok": true,
+            "t_cycles": 142,
+            "nonzero": []
+          },
+          {
+            "step": "main_entered",
+            "ok": true,
+            "t_cycles": 142
+          }
+        ],
+        "faults": [],
+        "uart_output": "tick test\n10 ticks: cycles=1500010\n10 ticks: us=10000\n",
+        "uart_lines": [
+          "tick test",
+          "10 ticks: cycles=1500010",
+          "10 ticks: us=10000"
+        ],
+        "gpio_toggles": {},
+        "xip_cache": {
+          "hits": 287,
+          "misses": 11,
+          "enabled": true
+        },
+        "memory_accesses": {
+          "FLASH": 298,
+          "SRAM": 243,
+          "PERIPH": 66,
+          "PPB": 15
+        },
+        "cycles_by_context": {
+          "ISR:SysTick": 530,
+          "boot": 142,
+          "main": 1799762
+        },
+        "final_registers": {
+          "r0": "0x00002710",
+          "r1": "0x000007D1",
+          "r2": "0x00002EE1",
+          "r3": "0x000249F0",
+          "r4": "0x00000000",
+          "r5": "0x00000000",
+          "r6": "0x00000000",
+          "r7": "0x00000000",
+          "r8": "0x00000000",
+          "r9": "0x00000000",
+          "r10": "0x00000000",
+          "r11": "0x00000000",
+          "r12": "0x00000000",
+          "sp": "0x20082000",
+          "msp": "0x20082000",
+          "psp": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x100001E4",
+          "xpsr": "0x61000000",
+          "control": 0,
+          "primask": 0,
+          "mode": "thread",
+          "privileged": true,
+          "sp_sel": "msp"
+        },
+        "systick_ticks": 12,
+        "globals": {
+          "reload_value": 150000,
+          "ticks": 12,
+          "t_start_cycles": 300226,
+          "t_end_cycles": 1800236,
+          "t_start_us": 2001,
+          "t_end_us": 12001
+        },
+        "markers": [],
+        "faults_injected": [
+          "systick_reload_off_by_one: SYST_RVR is loaded with N instead of N-1: every tick is one cycle too long."
+        ],
+        "options": {
+          "tick_us": 1000,
+          "reload_off_by_one": true
+        },
+        "tick": {
+          "reload": 150000,
+          "period_cycles": 150001.0,
+          "period_us": 1000.0,
+          "target_us": 1000,
+          "assumed_hz": 150000000,
+          "actual_hz": 150000000,
+          "ratio_to_target": 1.0
+        },
+        "cycles_to_main": 142
+      },
+      "wrong_clock": {
+        "variant": "wrong_clock",
+        "profile": "arm_like",
+        "stop_reason": "halt instruction",
+        "halted": true,
+        "lockup": false,
+        "cycles": 1800422,
+        "time_us": 150035.167,
+        "instructions_executed": 297,
+        "instret": 327,
+        "cpi": 5505.878,
+        "exception_entries": 12,
+        "tail_chains": 0,
+        "wfi_sleeps": 12,
+        "critical_sections": {
+          "count": 0,
+          "longest_cycles": 0
+        },
+        "ignored_privileged_ops": 0,
+        "fault_registers": {
+          "CFSR": "0x00000000",
+          "HFSR": "0x00000000",
+          "MMFAR": "0x00000000",
+          "BFAR": "0x00000000"
+        },
+        "boot_steps": [
+          {
+            "step": "power_on",
+            "ok": true,
+            "t_cycles": 0,
+            "image_sections": [
+              "startup",
+              "default_handler",
+              "main",
+              "faults"
+            ],
+            "data_words": 1,
+            "bss_words": 5
+          },
+          {
+            "step": "vector_table",
+            "ok": true,
+            "t_cycles": 0,
+            "vector_base": 268435456,
+            "initial_sp": 537403392,
+            "reset_vector": 268435713,
+            "problems": []
+          },
+          {
+            "step": "reset_handler",
+            "ok": true,
+            "t_cycles": 0
+          },
+          {
+            "step": "data_copied",
+            "ok": true,
+            "t_cycles": 79,
+            "mismatches": []
+          },
+          {
+            "step": "bss_zeroed",
+            "ok": true,
+            "t_cycles": 142,
+            "nonzero": []
+          },
+          {
+            "step": "main_entered",
+            "ok": true,
+            "t_cycles": 142
+          }
+        ],
+        "faults": [],
+        "uart_output": "tick test\n10 ticks: cycles=1500000\n10 ticks: us=125000\n",
+        "uart_lines": [
+          "tick test",
+          "10 ticks: cycles=1500000",
+          "10 ticks: us=125000"
+        ],
+        "gpio_toggles": {},
+        "xip_cache": {
+          "hits": 287,
+          "misses": 11,
+          "enabled": true
+        },
+        "memory_accesses": {
+          "FLASH": 298,
+          "SRAM": 243,
+          "PERIPH": 67,
+          "PPB": 15
+        },
+        "cycles_by_context": {
+          "ISR:SysTick": 530,
+          "boot": 142,
+          "main": 1799750
+        },
+        "final_registers": {
+          "r0": "0x0001E848",
+          "r1": "0x000061BB",
+          "r2": "0x00024A03",
+          "r3": "0x000249EF",
+          "r4": "0x00000000",
+          "r5": "0x00000000",
+          "r6": "0x00000000",
+          "r7": "0x00000000",
+          "r8": "0x00000000",
+          "r9": "0x00000000",
+          "r10": "0x00000000",
+          "r11": "0x00000000",
+          "r12": "0x00000000",
+          "sp": "0x20082000",
+          "msp": "0x20082000",
+          "psp": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x100001E4",
+          "xpsr": "0x61000000",
+          "control": 0,
+          "primask": 0,
+          "mode": "thread",
+          "privileged": true,
+          "sp_sel": "msp"
+        },
+        "systick_ticks": 12,
+        "globals": {
+          "reload_value": 149999,
+          "ticks": 12,
+          "t_start_cycles": 300224,
+          "t_end_cycles": 1800224,
+          "t_start_us": 25019,
+          "t_end_us": 150019
+        },
+        "markers": [],
+        "faults_injected": [
+          "wrong_clock_assumption: The reload is computed for 150 MHz but the core still runs from a slower clock. {'assumed_hz': 150000000, 'actual_hz': 12000000}"
+        ],
+        "options": {
+          "tick_us": 1000,
+          "assumed_hz": 150000000
+        },
+        "tick": {
+          "reload": 149999,
+          "period_cycles": 150000.0,
+          "period_us": 12500.0,
+          "target_us": 1000,
+          "assumed_hz": 150000000,
+          "actual_hz": 12000000,
+          "ratio_to_target": 12.5
+        },
+        "cycles_to_main": 142
+      }
+    },
+    "stop_reason": "correct: halt instruction; off_by_one: halt instruction; wrong_clock: halt instruction",
+    "measurements": [
+      {
+        "name": "reset to main",
+        "variant": "correct",
+        "value": 142,
+        "unit": "cycles",
+        "note": "0.95 us at 150 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": "correct",
+        "value": 5505.878,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      },
+      {
+        "name": "tick period",
+        "variant": "correct",
+        "value": 150000.0,
+        "unit": "cycles",
+        "note": "RVR=149999"
+      },
+      {
+        "name": "tick period",
+        "variant": "correct",
+        "value": 1000.0,
+        "unit": "us",
+        "note": "target 1000 us"
+      },
+      {
+        "name": "reset to main",
+        "variant": "off_by_one",
+        "value": 142,
+        "unit": "cycles",
+        "note": "0.95 us at 150 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": "off_by_one",
+        "value": 5505.914,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      },
+      {
+        "name": "tick period",
+        "variant": "off_by_one",
+        "value": 150001.0,
+        "unit": "cycles",
+        "note": "RVR=150000"
+      },
+      {
+        "name": "tick period",
+        "variant": "off_by_one",
+        "value": 1000.0,
+        "unit": "us",
+        "note": "target 1000 us"
+      },
+      {
+        "name": "reset to main",
+        "variant": "wrong_clock",
+        "value": 142,
+        "unit": "cycles",
+        "note": "11.83 us at 12 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": "wrong_clock",
+        "value": 5505.878,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      },
+      {
+        "name": "tick period",
+        "variant": "wrong_clock",
+        "value": 150000.0,
+        "unit": "cycles",
+        "note": "RVR=149999"
+      },
+      {
+        "name": "tick period",
+        "variant": "wrong_clock",
+        "value": 12500.0,
+        "unit": "us",
+        "note": "target 1000 us"
+      }
+    ]
+  },
+  "variants": [
+    "correct",
+    "off_by_one",
+    "wrong_clock"
+  ],
+  "result": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "no_faults",
+        "passed": true,
+        "detail": "0 fault(s)",
+        "variant": "correct",
+        "args": {}
+      },
+      {
+        "name": "metric_equals",
+        "passed": true,
+        "detail": "tick.period_cycles=150000.0",
+        "variant": "correct",
+        "args": {
+          "metric": "tick.period_cycles",
+          "value": 150000
+        }
+      },
+      {
+        "name": "metric_equals",
+        "passed": true,
+        "detail": "tick.period_us=1000.0",
+        "variant": "correct",
+        "args": {
+          "metric": "tick.period_us",
+          "value": 1000
+        }
+      },
+      {
+        "name": "metric_equals",
+        "passed": true,
+        "detail": "tick.period_cycles=150001.0",
+        "variant": "off_by_one",
+        "args": {
+          "metric": "tick.period_cycles",
+          "value": 150001
+        }
+      },
+      {
+        "name": "metric_equals",
+        "passed": true,
+        "detail": "tick.period_cycles=150000.0",
+        "variant": "wrong_clock",
+        "args": {
+          "metric": "tick.period_cycles",
+          "value": 150000
+        }
+      },
+      {
+        "name": "metric_between",
+        "passed": true,
+        "detail": "tick.period_us=12500.0 (want 12400..12600)",
+        "variant": "wrong_clock",
+        "args": {
+          "metric": "tick.period_us",
+          "min": 12400,
+          "max": 12600
+        }
+      }
+    ]
+  }
+}

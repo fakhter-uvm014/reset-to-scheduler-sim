@@ -1,0 +1,56 @@
+id: P09
+title: Stack overflow without the MPU - watermark hits 100 percent, then corruption
+layer: "5 Kernel"
+description: >
+  The same overflowing task C as P07, but the kernel never enables the MPU.
+  C's stack grows past its base, through the unused guard bytes and into the
+  neighbouring task stacks and globals. The watermark of C reaches 100
+  percent before anything goes wrong; then other tasks resume with corrupted
+  frames, and eventually an exception return pops a garbage frame (INVPC
+  UsageFault) or a push reaches unmapped memory (BusFault). Compare the
+  fault list and the task states with P07.
+program: kernel
+options:
+  tick_cycles: 2000
+  task_work: 150
+  stop_after_ticks: 30
+  misbehave_after: 4
+faults:
+  - {type: task_overflows_stack}
+  - {type: no_mpu}
+config:
+  seed: 1
+  max_cycles: 200000
+expected:
+  summary: No MemManage; instead a late BusFault/UsageFault chain, more than one task dead, C's watermark 100 percent and corrupted globals.
+  checks:
+    - {check: watermark_min_percent, task: C, value: 100}
+    - {check: min_events, kind: fault, count: 2}
+    - {check: task_state, task: C, state: DEAD}
+    - {check: task_state, task: A, state: DEAD}
+    - {check: global_gt, name: corruptions, value: 1}
+what_to_look_for: >
+  The mpu event says "MPU left disabled". After the marker "deep recursion
+  begins" there is a long gap with no fault: C's watermark climbs to 100
+  percent (visible in the watermarks attached to context_switch events) and
+  C keeps writing below its stack base. Later faults appear in the wrong
+  places: a BusFault from C when the stack finally reaches the bottom of
+  SRAM, then UsageFault INVPC events from tasks A and B whose saved frames
+  were overwritten (xPSR with a nonsense exception number, PC near 0). The
+  globals a_iters and corruptions hold garbage like 0xDEAD-derived values.
+  Several tasks end DEAD, versus exactly one in P07.
+likely_root_causes:
+  - "A task overflowed its stack and the system has no MPU guard, so the damage lands in whatever was linked below: another task's stack, the TCB array or globals."
+  - "The symptom (a fault in task A) is far from the cause (task C), which is the signature of memory corruption."
+how_to_debug:
+  - "Add stack watermarks: fill each stack with 0xA5A5A5A5 at creation and report the deepest overwritten word; a task at 100 percent is the culprit even if another task crashed."
+  - "Place a canary word below each stack and check it at every tick; the first broken canary names the overflowing task."
+  - "Enable the MPU with a guard region per task (P07) so the first bad write faults immediately with the address in MMFAR."
+  - "In the fault handler, print the stacked frame: a PC that is not inside any function and an xPSR with a wrong exception number means the frame itself was overwritten."
+what_this_means: >
+  Memory corruption is not detected where it happens but where its victim
+  runs. The watermark is the early-warning instrument: it climbs before the
+  crash. The MPU is the containment instrument: it converts the first bad
+  write into a precise fault. P07 and P09 are the same bug with and without
+  that containment, which is why the course asks for both.
+hidden_symptom: "Random tasks crash with UsageFault or BusFault at nonsense addresses; which one crashes changes with timing."

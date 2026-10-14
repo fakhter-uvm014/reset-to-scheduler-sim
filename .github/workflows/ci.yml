@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Unit, scenario and CLI tests
+        run: python -m pytest -q -W error --html=report.html --self-contained-html
+      - name: Run every scenario
+        run: python scripts/run_all.py
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.os }}-py${{ matrix.python }}
+          path: report.html
+
+  deploy-pages:
+    name: deploy viewer to GitHub Pages
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Regenerate traces and the test report
+        run: |
+          python scripts/run_all.py
+          python -m pytest -q --html=report.html --self-contained-html
+          mkdir -p docs/report
+          cp report.html docs/report/index.html
+      - name: Strip the report timestamp (no dates are published)
+        run: |
+          # pytest-html 4.x writes: "Report generated on DD-Mon-YYYY at HH:MM:SS by <a ...>pytest-html</a>"
+          sed -E -i 's/Report generated on [0-9]{1,2}-[A-Za-z]{3}-[0-9]{4} at [0-9]{2}:[0-9]{2}:[0-9]{2} by/Report built with/' docs/report/index.html
+          if grep -qE '[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}' docs/report/index.html; then
+            echo "a date is still present in docs/report/index.html"; exit 1
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4

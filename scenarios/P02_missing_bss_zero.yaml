@@ -1,0 +1,48 @@
+id: P02
+title: Boot fault - startup code forgets to zero .bss
+layer: "2 Boot"
+description: >
+  The same program as P01, but the reset handler skips the .bss loop. SRAM is
+  not zero at power-on (the model fills it with seeded pseudo-random words), so
+  the uninitialised global "counter" starts with garbage instead of 0 and the
+  program prints a nonsense value. Nothing crashes, which is exactly why this
+  bug is hard to find on real hardware.
+program: blink
+options: {}
+faults:
+  - {type: missing_bss_zero}
+config:
+  seed: 1
+  max_cycles: 50000
+expected:
+  summary: Boot reaches main without faults, but the bss_zeroed step reports garbage and "counter=" is not 1.
+  checks:
+    - {check: boot_step, step: bss_zeroed, ok: false}
+    - {check: boot_step, step: data_copied, ok: true}
+    - {check: no_faults}
+    - {check: uart_contains, text: "boot ok"}
+    - {check: uart_not_contains, text: "counter=1\n"}
+    - {check: uart_contains, text: "greeting_len=7"}
+what_to_look_for: >
+  Compare with P01. The boot_step event for bss_zeroed says the check FAILED and
+  names the global that still holds garbage (counter=0x........). The program
+  then runs normally: "boot ok", six LED edges, but the UART line "counter="
+  shows a large random number instead of 1, while "greeting_len=7" is still
+  correct because .data was copied. Change the seed in the YAML and the garbage
+  value changes: the symptom is non-deterministic on real hardware.
+likely_root_causes:
+  - "The reset handler has no .bss loop, or loops from __bss_start to __bss_start (wrong end symbol)."
+  - "The linker script does not define __bss_start/__bss_end, or they are not aligned so the loop stops early."
+  - "A .bss section was renamed (.bss.*, COMMON) and the linker script does not collect it into the zeroed range."
+  - "Globals placed in .noinit on purpose, then read as if they were zeroed."
+how_to_debug:
+  - "In GDB after reset, before main: 'print &counter' then 'x/wx &counter'. A non-zero value before any code touched it is the bug."
+  - "Run 'arm-none-eabi-nm -n' or 'readelf -S' and check the symbol lives between __bss_start and __bss_end."
+  - "Break on main, inspect several .bss globals: if they are all random, the loop never ran; if only the last ones are, the end symbol is wrong."
+  - "Power-cycle the board (not just reset): the value changes between power cycles when SRAM retains nothing."
+what_this_means: >
+  C promises that globals without an initialiser are zero, but it is the
+  startup code, not the hardware, that keeps that promise. A missing .bss loop
+  produces a program that is correct in a simulator that zeroes memory and
+  wrong on a board whose SRAM wakes up with random contents.
+hidden_symptom: "LED blinks, 'boot ok' prints, but 'counter=' shows a huge number instead of 1 and it changes between power cycles."

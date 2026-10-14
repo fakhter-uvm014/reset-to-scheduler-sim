@@ -1,0 +1,63 @@
+id: P07
+title: Misbehaving task hits the MPU stack guard - kernel kills it, others continue
+layer: "5 Kernel"
+description: >
+  Same kernel as P06, but task C starts recursing without bound after a few
+  iterations. Each level pushes four words and never returns. The stack grows
+  down into the 32-byte guard region below it, which the MPU marks no-access
+  for everyone. The first push into the guard is a MemManage fault; the fault
+  handler identifies the task from EXC_RETURN and PSP, marks it DEAD and
+  switches to another task. A and B keep running and the UART keeps printing.
+program: kernel
+options:
+  tick_cycles: 2000
+  task_work: 150
+  stop_after_ticks: 30
+  misbehave_after: 4
+faults:
+  - {type: task_overflows_stack}
+config:
+  seed: 1
+  max_cycles: 200000
+expected:
+  summary: One MemManage fault with MMARVALID pointing into guard_C; task C is DEAD with a 100 percent watermark; A and B keep running; no lockup.
+  checks:
+    - {check: fault_kind, kind: MemManage}
+    - {check: fault_reason_contains, text: "stack guard"}
+    - {check: task_state, task: C, state: DEAD}
+    - {check: task_alive, task: A}
+    - {check: watermark_min_percent, task: C, value: 100}
+    - {check: lockup, value: false}
+    - {check: uart_contains, text: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+    - {check: event_sequence, kinds: ["marker", "fault:ISR:MemManage", "task_state:DEAD", "context_switch"]}
+what_to_look_for: >
+  A marker event "taskC: deep recursion begins", then a fault event from
+  context C: "MemManage at PC=... (push {r4, r5, r6, lr}): write not permitted
+  in stack guard 'guard_C'". The fault record shows MMFSR DACCVIOL and
+  MMARVALID, MMFAR inside guard_C: an address inside the pushed range (on
+  the M33 typically the lowest; the model stores in ascending order, so
+  MMFAR = C's stack_base - 16 = 0x20000270), and
+  sp=psp equal to C's stack_base: the push was abandoned, so SP did not move.
+  Because PSP is already at the edge, the hardware cannot push the fault
+  frame either, so a second fault event reports a stacking error (MSTKERR,
+  CFSR=0x00000092); the kernel still identifies C from EXC_RETURN=0xFFFFFFFD
+  (a task was running). Run "r2s fault P07" to decode both records. Then a
+  task_state event C -> DEAD "kernel kills the task", a context_switch to
+  the next task, and the alphabet continues. In the summary, C's watermark is
+  100 percent (every word overwritten) while A and B stay around 25 percent.
+likely_root_causes:
+  - "Unbounded recursion or a large local array in a task with a small stack."
+  - "A task calling a library routine (printf, floating point) that needs far more stack than planned."
+  - "Stack size computed in words but passed in bytes (or the reverse), making the real stack four times smaller than intended."
+how_to_debug:
+  - "Read SCB->CFSR and SCB->MMFAR in the fault handler: DACCVIOL + MMARVALID with MMFAR in the guard just below a task's stack base (anywhere in the pushed range, typically its lowest address) is a stack overflow caught by the guard."
+  - "Check which stack the frame is on: EXC_RETURN bit 2 set (0xFFFFFFFD) means the task's PSP, so the faulting task is the current TCB."
+  - "Print the stack watermark of every task periodically; a task that climbs toward 100 percent is the next one to fault."
+  - "Give the task more stack or remove the recursion; keep the guard, it costs one MPU region per task."
+what_this_means: >
+  Without protection a stack overflow silently corrupts whatever lies below
+  the stack (see P09). An MPU guard region turns that silent corruption into
+  a precise fault at the first bad write, with the address in MMFAR and the
+  guilty task identifiable from PSP. The kernel can then contain the damage
+  to that one task, which is the whole promise of memory protection.
+hidden_symptom: "One of the three tasks stops; the other two keep going; the fault log shows a MemManage with an address just below a stack."

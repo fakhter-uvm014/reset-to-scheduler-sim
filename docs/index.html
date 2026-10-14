@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reset to Scheduler Viewer</title>
+<meta name="description" content="Trace viewer for reset-to-scheduler-sim: a behavioral model of a Pico 2 (RP2350, Cortex-M33) style microcontroller from power-on reset to a preemptive kernel.">
+<link rel="stylesheet" href="style.css">
+<script>
+  (function () {
+    try {
+      var t = localStorage.getItem("r2s-theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) { /* storage unavailable: follow the system theme */ }
+  })();
+</script>
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <div>
+      <h1>Reset to Scheduler</h1>
+      <p class="tag">From power-on reset to a preemptive kernel on a Pico 2 style Cortex-M33: boot, exceptions, context switches, faults and cycle counts, step by step. A behavioral model for learning and demonstration.</p>
+    </div>
+    <nav>
+      <a href="https://github.com/fakhter-uvm014/reset-to-scheduler-sim">GitHub repo</a>
+      <a href="https://github.com/fakhter-uvm014/reset-to-scheduler-sim/tree/main/docs/guide">Guide on GitHub</a>
+      <button id="theme" type="button" aria-label="Switch colour theme">Theme: auto</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="loadError" class="notice hidden"></div>
+
+  <section class="card" id="pickerCard">
+    <div class="row">
+      <label>Scenario <select id="scenario" aria-label="Scenario"></select></label>
+      <label id="variantWrap" class="hidden">Variant <select id="variant" aria-label="Variant"></select></label>
+      <span id="pill" class="pill" title="Did the run match the scenario's expected outcome?"></span>
+      <label title="Hide the scenario title, injected faults and root-cause notes until you click Reveal"><input type="checkbox" id="mystery"> Mystery mode</label>
+    </div>
+    <h2 id="title"></h2>
+    <p id="desc" class="muted"></p>
+    <p><strong>Expected outcome:</strong> <span id="expected"></span></p>
+    <ul id="injected" class="injected"></ul>
+  </section>
+
+  <section class="card">
+    <h3>
+      <span>Timeline: who owns the CPU</span>
+      <span class="row">
+        <button type="button" id="zoomOut" aria-label="Zoom out">&minus;</button>
+        <button type="button" id="zoomFit">Fit</button>
+        <button type="button" id="zoomIn" aria-label="Zoom in">+</button>
+      </span>
+    </h3>
+    <div class="tl">
+      <div class="tl-labels" id="tlLabels"></div>
+      <div class="tl-scroll" id="tlScroll"><svg id="timeline" role="img" aria-label="Execution context over time"></svg></div>
+    </div>
+    <div class="legend" style="margin-top:8px">
+      <span><i style="background:var(--accent)"></i>thread (reset, main, tasks)</span>
+      <span><i style="background:var(--warn)"></i>interrupt handler</span>
+      <span><i style="background:var(--ok)"></i>kernel handler (SVCall, PendSV)</span>
+      <span><i style="background:var(--bad)"></i>fault handler</span>
+      <span><i style="background:var(--muted);opacity:.4"></i>sleeping (wfi)</span>
+      <span>top strip: <b style="color:var(--bad)">|</b> fault <b style="color:var(--ok)">|</b> switch <b style="color:var(--accent)">|</b> marker/boot</span>
+    </div>
+  </section>
+
+  <section class="card stepper">
+    <div class="row">
+      <button type="button" id="first" aria-label="First event">&#124;&lsaquo;</button>
+      <button type="button" id="prev" aria-label="Previous event">&lsaquo; Prev</button>
+      <button type="button" id="next" class="primary" aria-label="Next event">Next &rsaquo;</button>
+      <button type="button" id="last" aria-label="Last event">&rsaquo;&#124;</button>
+      <label>Step by
+        <select id="stepKind" aria-label="Step by kind">
+          <option value="">any event</option>
+          <option value="exception">exception entry/return</option>
+          <option value="context_switch">context switch</option>
+          <option value="fault">fault</option>
+          <option value="boot_step">boot step</option>
+          <option value="syscall">system call</option>
+          <option value="marker">marker</option>
+        </select>
+      </label>
+      <button type="button" id="setA" title="Remember this event as cursor A, like a scope cursor">Set cursor A</button>
+      <span class="muted small">Keys: &larr; &rarr;</span>
+    </div>
+    <div id="evline"></div>
+    <div class="counters" id="counters"></div>
+  </section>
+
+  <div class="grid3">
+    <section class="card" id="regsCard">
+      <h3><span>Registers</span><span id="regMode" class="small"></span></h3>
+      <div class="regs" id="regs"></div>
+      <div class="decode" id="regDecode"></div>
+    </section>
+    <section class="card" id="stackCard">
+      <h3><span>Stack and memory</span></h3>
+      <div id="stack"></div>
+    </section>
+    <section class="card" id="decoderCard">
+      <h3><span>Exception and fault decoder</span></h3>
+      <div id="decoder"></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h3>
+      <span>Event log</span>
+      <span class="row">
+        <label>Kind <select id="kindFilter" aria-label="Filter by kind"><option value="">all</option></select></label>
+        <input id="search" type="search" placeholder="search reason, context..." aria-label="Search events">
+        <span id="logCount" class="muted small"></span>
+      </span>
+    </h3>
+    <div class="logwrap" id="logwrap">
+      <table id="log">
+        <thead><tr><th>#</th><th>cycles</th><th>&micro;s</th><th>kind</th><th>from &rarr; to</th><th>reason</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h3><span>Measurements</span><span class="small">model numbers; see the guide for real-hardware ranges</span></h3>
+      <div class="scroll-x"><table id="measure"></table></div>
+    </section>
+    <section class="card">
+      <h3><span>Summary</span><span id="pill2" class="pill"></span></h3>
+      <div id="result"></div>
+    </section>
+  </div>
+
+  <section class="card notes">
+    <h3><span>Learning notes</span><button type="button" id="reveal" class="hidden">Reveal root cause</button></h3>
+    <div id="notes"></div>
+  </section>
+</main>
+
+<div id="tooltip" class="tooltip hidden" role="tooltip"></div>
+<footer>Farzana Akhter</footer>
+<script src="app.js"></script>
+</body>
+</html>

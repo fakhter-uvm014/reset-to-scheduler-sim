@@ -1,0 +1,69 @@
+id: P12
+title: SVC system call path - privilege round trip, an ignored cpsid and a forbidden SysTick write
+layer: "5 Kernel"
+description: >
+  Tasks run unprivileged on the PSP. Task C prints "C" through "svc #3"
+  (write): the core enters handler mode (privileged, MSP), the SVC handler
+  reads the SVC number from the svc instruction just before the stacked PC,
+  takes the argument from the stacked r0, writes the UART, puts the return
+  value into the stacked r0 and returns to unprivileged thread mode. On its
+  third iteration C tries two privileged things directly. "cpsid i" is
+  silently ignored, exactly as on the real core (PRIMASK stays 0, no fault).
+  The write to SYST_CSR is an unprivileged access to the System Control
+  Space: a precise BusFault with BFAR = 0xE000E010. The kernel kills C; A and
+  B continue.
+program: kernel
+options:
+  tick_cycles: 2000
+  task_work: 150
+  stop_after_ticks: 30
+faults:
+  - {type: task_privileged_op}
+config:
+  seed: 1
+  max_cycles: 200000
+expected:
+  summary: Several svc write calls succeed with a privilege round trip each; cpsid in task C is ignored; the SysTick write is a precise BusFault (BFAR=0xE000E010); C is DEAD, A and B keep running, no lockup.
+  checks:
+    - {check: min_events, kind: syscall, count: 6}
+    - {check: event_contains, kind: privilege, text: "'cpsid' ignored"}
+    - {check: fault_kind, kind: BusFault}
+    - {check: fault_flag, flag: PRECISERR}
+    - {check: metric_equals, metric: fault_registers.BFAR, value: "0xE000E010"}
+    - {check: fault_reason_contains, text: "unprivileged access to PPB"}
+    - {check: task_state, task: C, state: DEAD}
+    - {check: task_alive, task: B}
+    - {check: lockup, value: false}
+    - {check: global_equals, name: svc_errors, value: 0}
+    - {check: uart_contains, text: "C"}
+    - {check: event_sequence, kinds: ["syscall", "exception_entry:ISR:SVCall", "syscall:kernel:SVCall", "exception_return", "marker", "privilege", "fault:ISR:BusFault", "task_state:DEAD"]}
+what_to_look_for: >
+  For each system call: a cpu syscall event "svc #3 from unprivileged thread
+  (r0=0x00000043)", an exception_entry SVCall whose stacked frame holds the
+  argument in r0 and the return address in pc, a kernel syscall event that
+  says where the SVC number came from (stacked PC - 4) and that the return
+  value 1 was written to the stacked r0, and an exception_return "back to
+  thread mode (unprivileged)". Then a marker "taskC: trying a privileged
+  operation directly", a privilege event "'cpsid' ignored" (no fault, PRIMASK
+  unchanged), and a fault event: BusFault PRECISERR at the "str r1, [r0]"
+  instruction, privileged=false, context C, BFAR=0xE000E010 (SYST_CSR). The
+  task_state event says C is DEAD and a context_switch moves on. The kernel
+  event at scheduler start (CONTROL=3) is where the privilege drop happened.
+likely_root_causes:
+  - "A task calls a kernel function directly instead of through SVC: with CONTROL.nPRIV set, NVIC/SysTick/SCB/MPU registers give a BusFault and cpsid/cpsie/msr are ignored."
+  - "The SVC handler reads arguments from the live r0-r3 instead of the stacked frame; and the return value must be written to the stacked r0 (see P17)."
+  - "The handler picks the wrong stack (MSP vs PSP) when locating the frame; test EXC_RETURN bit 2 (tst lr, #4)."
+  - "The SVC number is read from the wrong place: it is the immediate of the svc instruction at (stacked PC - 2) for the 16-bit Thumb encoding, not a register."
+how_to_debug:
+  - "Break in the SVC handler: 'p/x $lr' (EXC_RETURN), then 'x/8xw $psp'. r0 must be the argument and the stacked PC must point just after the svc instruction ('x/i <stacked pc> - 2')."
+  - "Read CONTROL from the task ('mrs r0, control' or 'p $control' in GDB): bit 0 = 1 means unprivileged, bit 1 = 1 means PSP."
+  - "Put cpsid i in a task on real hardware and read PRIMASK afterwards ('p $primask'): it stays 0, proving the instruction was ignored."
+  - "Decode the BusFault: CFSR (0xE000ED28) shows PRECISERR+BFARVALID, BFAR (0xE000ED38) = 0xE000E010, and the stacked PC is the store that tried to write SysTick."
+what_this_means: >
+  SVC is the only door from an unprivileged task into the kernel: the
+  hardware raises the privilege on entry and drops it again on return, and
+  arguments and results travel through the stacked frame. Anything a task
+  tries to do directly that needs privilege either fails loudly (BusFault on
+  the System Control Space) or silently (cpsid ignored). Either way the
+  kernel's state is protected, which is the reason tasks run unprivileged.
+hidden_symptom: "A task that tries to disable interrupts has no effect at all; the same task dies with a BusFault when it touches SysTick."

@@ -1,0 +1,51 @@
+id: P17
+title: SVC returns the wrong value - result written to the live r0, not the stacked r0
+layer: "5 Kernel"
+description: >
+  The kernel from P06 with one bug in the SVC handler: after handling
+  write(), it puts the return value 1 into the register r0 instead of into
+  the stacked r0 of the caller's exception frame. On exception return the
+  hardware pops the frame and overwrites r0 with the stacked value, which is
+  still the argument (the character code). Task B checks the return value of
+  every write() and counts the failures. The character is still printed, so
+  the system looks healthy from the outside.
+program: kernel
+options:
+  tick_cycles: 2000
+  task_work: 150
+  stop_after_ticks: 30
+faults:
+  - {type: svc_return_in_live_r0}
+config:
+  seed: 1
+  max_cycles: 200000
+expected:
+  summary: No faults, the alphabet is printed, but every write() returns its argument instead of 1, so svc_errors climbs and task B reports it.
+  checks:
+    - {check: no_faults}
+    - {check: uart_contains, text: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+    - {check: global_gt, name: svc_errors, value: 10}
+    - {check: event_contains, kind: syscall, text: "LIVE r0"}
+    - {check: event_contains, kind: marker, text: "write() returned a wrong value"}
+what_to_look_for: >
+  Each kernel syscall event for write says "return value 1 written to the
+  LIVE r0 (lost ...)". The following exception_return pops the frame: its
+  popped_frame.r0 is the character (0x41, 0x42 ...), and in the viewer's
+  register panel r0 after the return is that character, not 1. Task B's
+  marker "write() returned a wrong value" follows every call and the global
+  svc_errors grows. Compare with P06, where svc_errors stays 0 and the
+  syscall event says "written to the stacked r0 at 0x2000....".
+likely_root_causes:
+  - "The SVC handler (C function) returns its result normally, and the assembly wrapper never stores r0 into the frame."
+  - "The handler writes the frame through the wrong stack pointer (MSP instead of PSP), so it updates some other memory and the caller's frame keeps the argument."
+  - "The frame pointer passed to the C dispatcher is computed before the hardware frame (off by 32 bytes), so 'frame[0] = result' lands in the wrong word."
+how_to_debug:
+  - "Break at the end of the SVC handler: 'x/8xw $psp' and check word 0 (stacked r0) holds the result before 'bx lr'."
+  - "Step over the exception return ('stepi' on bx lr) and 'p/x $r0' in the task: it equals the stacked word, whatever the handler left in the live r0."
+  - "Write a test system call that returns a constant (e.g. 0x1234) and check it from a task."
+what_this_means: >
+  An exception return restores r0-r3, r12, lr, pc and xPSR from the stack, so
+  for the caller of svc the stacked frame IS the register file. Arguments
+  are read from it and results must be written into it. Anything written to
+  the live registers is overwritten by the hardware on the way out.
+hidden_symptom: "Output appears normally, but every system call reports failure to its caller."

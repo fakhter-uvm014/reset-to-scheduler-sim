@@ -1,0 +1,74 @@
+id: P15
+title: PendSV priority not lowest - the context switch runs inside an interrupt handler
+layer: "5 Kernel"
+description: >
+  The kernel from P06 plus a long button interrupt handler (priority 0xC0,
+  less urgent than SysTick at 0x80). The handler counts to 3000 in r4 with a
+  shadow copy in r5 and checks that they still agree at the end. SysTick
+  ticks while the handler runs and pends PendSV. In the "correct" variant
+  PendSV has the lowest priority (0xFF), so it waits until the button handler
+  has returned and then switches tasks cleanly. In "pendsv_high" PendSV was
+  given 0x80, the same as SysTick: it pre-empts the button handler, saves the
+  handler's registers as if they were the task's, loads another task's
+  registers and returns into the handler. The handler continues with another
+  task's r4/r5, and the interrupted tasks resume with mixed-up registers.
+program: kernel
+options:
+  tick_cycles: 2000
+  task_work: 150
+  stop_after_ticks: 30
+  button_irq: true
+  isr_work: 3000
+stimuli:
+  - {action: button_press, at_us: 40}
+  - {action: button_press, at_us: 260}
+config:
+  seed: 1
+  max_cycles: 300000
+variants:
+  - name: correct
+    options: {pendsv_priority: 0xFF}
+  - name: pendsv_high
+    hidden_symptom: "Under button presses, a long interrupt handler occasionally computes a wrong result and a task's counter jumps; with no button presses everything is fine."
+    faults:
+      - {type: pendsv_priority_not_lowest, priority: 0x80}
+expected:
+  summary: With PendSV lowest, the button handler always finishes intact and every switch happens with EXC_RETURN 0xFFFFFFFD; with PendSV at 0x80, switches run on top of the handler (EXC_RETURN 0xFFFFFFF1) and the handler detects corrupted registers.
+  checks:
+    - {check: no_faults, variant: correct}
+    - {check: global_equals, variant: correct, name: isr_corruptions, value: 0}
+    - {check: global_gt, variant: pendsv_high, name: isr_corruptions, value: 0}
+    - {check: event_contains, variant: pendsv_high, kind: context_switch, text: "on top of another handler"}
+    - {check: event_contains, variant: pendsv_high, kind: kernel, text: "NOT the lowest priority"}
+    - {check: min_events, variant: correct, kind: exception_entry, to: "ISR:IRQ_GPIO", count: 2}
+what_to_look_for: >
+  Both variants: two button presses, each an exception_entry for IRQ_GPIO
+  from a task, and SysTick ticks that pre-empt the long handler (exception
+  entries with EXC_RETURN 0xFFFFFFF1, i.e. "I interrupted a handler"). In
+  "correct" the irq_pend PendSV stays pending until the button handler's
+  exception_return, then PendSV tail-chains with LR=0xFFFFFFFD and the
+  switch is clean. In "pendsv_high" the kernel event at init already warns
+  that PendSV is not the lowest priority; then the SysTick return tail-chains
+  straight into PendSV with LR=0xFFFFFFF1 and the context_switch event warns
+  "running ... on top of another handler". A marker "GPIO handler: r4/r5
+  changed under the handler" follows, and isr_corruptions counts it. Click
+  the context_switch in the viewer and compare the saved r4/r5 of the
+  switched-out task with the handler's loop counter.
+likely_root_causes:
+  - "PendSV priority left at its reset value 0 (the most urgent configurable level) because SHPR3 was never written."
+  - "SHPR3 written as a whole word with the wrong byte order, so PendSV got SysTick's priority or vice versa."
+  - "All system exceptions set to one 'kernel priority' for convenience, so PendSV ties with or beats device interrupts."
+  - "A kernel that triggers the switch directly from SysTick or an ISR instead of pending PendSV."
+how_to_debug:
+  - "Read SHPR3 in GDB: 'x/xw 0xE000ED20'. Byte 2 (PendSV) must be the numerically largest priority in the system (0xF0 with 4 priority bits)."
+  - "In PendSV_Handler assert that LR == 0xFFFFFFFD (or check EXC_RETURN bit 3 = thread mode); halt if not."
+  - "Put a marker pin in the long ISR and another in PendSV: on the scope a PendSV pulse inside the ISR pulse is the bug."
+  - "In the ISR, keep a shadow copy of a callee-saved register as here and check it at the end; corruption that appears only under interrupt load points at the switch."
+what_this_means: >
+  PendSV is lowest priority by design: it makes the switch wait until every
+  other handler has finished, so the only thing it ever saves is a task.
+  Give it a higher priority and the kernel will one day save an interrupt
+  handler's registers into a task's context. Nothing faults; registers just
+  move between contexts, which is the hardest kind of bug to find without
+  knowing this rule.
+hidden_symptom: "Under button presses, a long interrupt handler occasionally computes a wrong result and a task's counter jumps; with no button presses everything is fine."

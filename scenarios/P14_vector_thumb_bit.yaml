@@ -1,0 +1,61 @@
+id: P14
+title: HardFault at reset - the reset vector is missing the Thumb bit
+layer: "2 Boot"
+description: >
+  The vector table was written by hand and the reset entry holds the plain
+  address of Reset_Handler with bit 0 clear. Cortex-M only executes Thumb
+  code: bit 0 of every vector must be 1, and the core copies it into the
+  xPSR T bit. With T=0 the very first instruction raises a UsageFault
+  INVSTATE. UsageFault is disabled at reset, so it escalates to HardFault.
+  The HardFault vector is correct, so the fault handler runs, prints the
+  fault registers on the UART and stops. Not one line of the startup code
+  ran.
+program: blink
+options: {}
+faults:
+  - {type: vector_thumb_bit_missing, exception: 1}
+config:
+  seed: 1
+  max_cycles: 20000
+expected:
+  summary: The vector_table step reports the missing Thumb bit; Reset_Handler never runs; a HardFault (FORCED) escalated from UsageFault INVSTATE with the stacked PC at Reset_Handler and stacked xPSR.T=0; the fault printer reports it.
+  checks:
+    - {check: boot_step, step: vector_table, ok: false}
+    - {check: boot_problem_contains, text: "Thumb bit missing"}
+    - {check: no_event, kind: boot_step, to: reset_handler}
+    - {check: fault_kind, kind: HardFault}
+    - {check: fault_flag, flag: INVSTATE}
+    - {check: fault_escalated_from, kind: UsageFault}
+    - {check: fault_count, count: 1}
+    - {check: uart_contains, text: "*** HardFault ***"}
+    - {check: uart_contains, text: "UFSR.INVSTATE"}
+    - {check: uart_not_contains, text: "boot ok"}
+    - {check: lockup, value: false}
+what_to_look_for: >
+  The vector_table boot step reads "word1 -> 0x10000100 -> PC=0x10000100,
+  xPSR.T=0" and flags "reset vector has bit 0 clear". There is no
+  reset_handler boot step: the first fetch never executes. The fault event
+  says UsageFault INVSTATE at PC=0x10000100 escalated to HardFault (UsageFault
+  disabled in SHCSR). The exception_entry for HardFault shows the stacked
+  frame: pc=0x10000100 (Reset_Handler itself) and xpsr=0x00000000 (T bit
+  clear, IPSR 0). The UART shows the fault printer's output: CFSR=0x00020000
+  (UFSR.INVSTATE), HFSR=0x40000000 (FORCED). Compare the vector table entries
+  in image_map with P01: every handler entry there ends in an odd digit.
+likely_root_causes:
+  - "A hand-written vector table in assembly that uses a label without .thumb_func (or .type func, %function), so the assembler does not set bit 0."
+  - "A vector table filled with computed addresses (e.g. (uint32_t)&handler & ~1, or a constant like 0x10000100)."
+  - "Relocating the vector table to SRAM and copying entries through a mask that clears bit 0."
+  - "The same bug in a branch target: 'bx r0' with an even address, or a function pointer built from a data address, gives the same INVSTATE fault later in the program."
+how_to_debug:
+  - "Dump the table: 'x/4xw 0x10000000' in GDB. Word 1 (reset) and every handler entry must be odd (0x....1, 0x....3 ...)."
+  - "In the HardFault handler read HFSR (0xE000ED2C): FORCED set means look at CFSR (0xE000ED28); bit 17 (INVSTATE) points at the Thumb bit."
+  - "Look at the stacked xPSR: bit 24 (T) is 0. The stacked PC is the address the core tried to execute in the wrong state."
+  - "Fix the source (.thumb_func, or let the C compiler emit the table) and confirm with 'arm-none-eabi-objdump -s -j .vectors' that the entries are odd."
+what_this_means: >
+  The Thumb bit is how Cortex-M checks that a code address really is a Thumb
+  code address. It lives in bit 0 of every vector, of every bx target and of
+  the stacked return state. Forgetting it does not crash the program
+  somewhere random: it crashes the very first instruction that uses the bad
+  address, and the fault status registers name the cause precisely
+  (INVSTATE), which is why a fault decoder is the first tool to build.
+hidden_symptom: "The board never prints 'boot ok'; the only output is a HardFault dump."

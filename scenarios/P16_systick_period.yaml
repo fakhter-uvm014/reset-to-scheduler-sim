@@ -1,0 +1,69 @@
+id: P16
+title: SysTick period - off-by-one reload and a wrong clock assumption
+layer: "3 Drivers"
+description: >
+  A bare-metal program programs SysTick for a 1 ms tick and measures ten
+  tick periods twice: with the core cycle counter (DWT CYCCNT) and with the
+  1 MHz system timer (TIMERAWL), which runs from its own reference and does
+  not depend on the core clock. Three variants. "correct": RVR = 150000 - 1
+  for a 150 MHz core. "off_by_one": RVR = 150000, so every period is 150001
+  cycles. "wrong_clock": the reload is computed for 150 MHz, but the core is
+  still running at 12 MHz (the clock setup was skipped), so each tick takes
+  12.5 times longer in real time while looking perfect in cycles.
+program: tick
+options:
+  tick_us: 1000
+config:
+  seed: 1
+  max_cycles: 2000000
+variants:
+  - name: correct
+  - name: off_by_one
+    hidden_symptom: "A 1 ms software clock runs slightly slow: it lags by about half a second per day."
+    faults:
+      - {type: systick_reload_off_by_one}
+  - name: wrong_clock
+    hidden_symptom: "The scheduler tick looks right when counted in CPU cycles, but on the scope every period is 12.5 times too long."
+    faults:
+      - {type: wrong_clock_assumption, assumed_hz: 150000000, actual_hz: 12000000}
+expected:
+  summary: correct gives 150000 cycles and 1000 us per tick; off_by_one gives 150001 cycles per tick; wrong_clock gives 150000 cycles but 12500 us per tick.
+  checks:
+    - {check: no_faults, variant: correct}
+    - {check: metric_equals, variant: correct, metric: tick.period_cycles, value: 150000}
+    - {check: metric_equals, variant: correct, metric: tick.period_us, value: 1000}
+    - {check: metric_equals, variant: off_by_one, metric: tick.period_cycles, value: 150001}
+    - {check: metric_equals, variant: wrong_clock, metric: tick.period_cycles, value: 150000}
+    - {check: metric_between, variant: wrong_clock, metric: tick.period_us, min: 12400, max: 12600}
+what_to_look_for: >
+  The program times ticks 2 to 12, not 1 to 11: the first SysTick handler
+  runs from a cold XIP cache and reads CYCCNT about 20 cycles later than the
+  others, which would bias the result (a real effect worth seeing once: run
+  "r2s run P16 --trace --kinds exception_entry,exception_return" and compare
+  the first handler's duration with the second's). Then read the UART lines
+  "10 ticks: cycles=" and "10 ticks: us=" in each variant, and
+  summary.variants.<name>.tick (also in the measurements table). correct:
+  1500000 cycles and 10000 us. off_by_one: 1500010 cycles. One extra cycle
+  at 150 MHz is about 6.7 ns per tick, 0.07 us over the 10 measured ticks, so
+  the 1 MHz timer still reads 10000 us: invisible in a short test, but about
+  0.58 s per day at 1000 ticks per second.
+  wrong_clock: 1500000 cycles (the cycle count cannot see the problem, it is
+  counted in the wrong unit) but 125000 us. The irq_pend SysTick events are
+  spaced 150000 or 150001 cycles apart; the t_us column of the trace uses the
+  model's clock, so in wrong_clock the ticks are 12.5 ms apart.
+likely_root_causes:
+  - "RVR loaded with the period instead of period - 1: SysTick counts RVR..0, so the period is RVR + 1 cycles."
+  - "The reload computed for the final PLL frequency while the core still runs from the crystal or ring oscillator (clock setup skipped, failed, or done after SysTick setup)."
+  - "CLKSOURCE (SYST_CSR bit 2) selecting the external reference instead of the processor clock, or the reverse, so the tick runs at a different rate than the formula assumes."
+  - "A reload larger than 24 bits (0xFFFFFF) silently truncated by the hardware."
+how_to_debug:
+  - "Time ten ticks with two independent clocks (CYCCNT and the 1 MHz timer, or a GPIO toggle on the scope). If cycles look right but time does not, the clock frequency is wrong; if both are off by a constant, the reload is wrong."
+  - "Read back SYST_RVR (0xE000E014) and SYST_CSR (0xE000E010) in GDB and redo the arithmetic: period = (RVR + 1) / f_clk."
+  - "Check the real core frequency: toggle a pin in a loop of known cycle count and measure it on the scope, or read the clock registers."
+  - "Convert every cycle measurement to time with the clock you measured, not the clock you intended."
+what_this_means: >
+  A timer period is a count times a clock period, and both can be wrong
+  independently. Counting in cycles confirms the count; only a second,
+  independent time base confirms the clock. That is why the course asks for
+  every on-chip number to be cross-checked on the oscilloscope.
+hidden_symptom: "The scheduler tick looks right in the debugger, but task periods measured on the scope are 12.5 times too long (or drift slowly)."

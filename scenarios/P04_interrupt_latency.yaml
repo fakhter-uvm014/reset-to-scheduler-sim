@@ -1,0 +1,65 @@
+id: P04
+title: Interrupt latency - button IRQ with a GPIO marker, light vs heavy load
+layer: "4 Exceptions"
+description: >
+  A pushbutton on GP14 triggers IRQ_GPIO (IRQ 21, IO_IRQ_BANK0 on the RP2350,
+  priority 0x40 written into byte 1 of NVIC_IPR5). The handler's first instruction sets
+  the marker pin GP16, which an oscilloscope would see. The scenario presses
+  the button 24 times at irregular intervals and measures, for each press, the
+  cycles from the edge to the marker. Two variants run the same program: in
+  "light" the main loop never masks interrupts; in "heavy" it spends part of
+  its time inside cpsid/cpsie critical sections, so a press that lands inside
+  one waits until cpsie.
+program: latency
+options:
+  critical_section_len: 60
+config:
+  seed: 1
+  max_cycles: 80000
+stimuli:
+  - {action: button_press, start_us: 20, every_us: 15, count: 8}
+  - {action: button_press, start_us: 141, every_us: 17, count: 8}
+  - {action: button_press, start_us: 287, every_us: 13, count: 8}
+variants:
+  - name: light
+    options: {heavy: false}
+  - name: heavy
+    options: {heavy: true}
+expected:
+  summary: Light load gives a tight histogram near the 12-cycle entry cost; heavy load spreads it up to the critical-section length with much larger jitter.
+  checks:
+    - {check: no_faults, variant: light}
+    - {check: no_faults, variant: heavy}
+    - {check: latency_jitter_gt, a: heavy, b: light}
+    - {check: variant_lt, metric: latency.max, a: light, b: heavy}
+what_to_look_for: >
+  summary.variants.light.latency: samples=24, min and max within a cycle of 12
+  (the exception entry cost in the arm_like profile; Arm quotes 12 cycles for
+  the Cortex-M33 with zero-wait-state memory), jitter 0-1 (the instruction in
+  flight must finish first). summary.variants.heavy.latency: the same minimum
+  (presses that land outside a critical section) but a maximum close to the
+  critical-section length, a histogram with several buckets and jitter of
+  well over 100 cycles. In the event log each press is a gpio stimulus event,
+  then irq_pend, exception_entry and the MARKER pin 16 -> 1 event. In the
+  heavy variant some presses are followed by a critical_section event "cpsie i
+  after N cycles with PRIMASK=1; IRQ_GPIO was pending for M cycles": that M is
+  exactly the extra latency. summary.variants.heavy.critical_sections gives
+  the count and the longest masked stretch.
+likely_root_causes:
+  - "Long critical sections (cpsid i / __disable_irq) in the main loop or in drivers."
+  - "Another interrupt of the same or higher priority running when the button fires (see P05)."
+  - "The GPIO marker is set late in the handler (after prologue work), so the scope measures handler code, not latency."
+  - "A slow flash fetch of the handler (XIP cache miss) adds cycles the first time; see P10."
+how_to_debug:
+  - "Toggle the marker pin as the very first instruction of the handler and trigger the scope on the button edge; measure edge-to-marker."
+  - "Read DWT CYCCNT at the start of the handler and keep min/max/avg in globals; print them from the main loop."
+  - "Search the code for cpsid/__disable_irq and measure each region's length in cycles; the longest region bounds the worst-case latency."
+  - "Repeat with the main loop idle (wfi) to get the floor, then add load and watch the histogram widen."
+what_this_means: >
+  Interrupt latency has a hardware floor (the cycles to stack the frame and
+  fetch the vector) and a software ceiling set by the longest stretch during
+  which interrupts cannot be taken. The average hides the ceiling; the
+  histogram and the maximum show it. On the board the scope confirms the
+  marker, and any difference from the counter is the cost of the measurement
+  code itself.
+hidden_symptom: "Button response is usually instant but sometimes visibly late; the latency histogram has a long tail."

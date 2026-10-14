@@ -1,0 +1,59 @@
+id: P11
+title: ISA comparison - the same benchmark under the arm_like and riscv_like cost profiles
+layer: "1 ISA"
+description: >
+  The same checksum loop as P10 (in SRAM, to keep the memory hierarchy out
+  of the picture) is charged with two illustrative cost tables. arm_like
+  has load/store multiple and 16-bit encodings for simple operations;
+  riscv_like models base RV32IMC without Zcmp: no store/load-multiple (one
+  instruction per register; Hazard3 adds Zcmp's cm.push/cm.popret, which
+  this profile leaves out), compare-and-branch instructions, and mostly
+  4-byte encodings. The summary reports
+  cycles, instructions retired, CPI and static code size per profile. The
+  numbers are illustrative models, not measurements of real cores.
+program: bench
+options:
+  iterations: 200
+  code_region: sram
+config:
+  seed: 1
+  max_cycles: 400000
+variants:
+  - name: arm_like
+    config: {profile: arm_like}
+  - name: riscv_like
+    config: {profile: riscv_like}
+expected:
+  summary: Both profiles execute the same program; they differ in instret (riscv_like retires fewer because it has compare-and-branch instructions, but more for push/pop), in cycles and CPI, and in static code size (arm_like denser).
+  checks:
+    - {check: no_faults, variant: arm_like}
+    - {check: no_faults, variant: riscv_like}
+    - {check: variant_lt, metric: bench.static_code_bytes, a: arm_like, b: riscv_like}
+    - {check: variant_lt, metric: bench.bench_cycles, a: arm_like, b: riscv_like}
+    - {check: variant_lt, metric: bench.instret, a: riscv_like, b: arm_like}
+what_to_look_for: >
+  summary.variants.arm_like.bench vs summary.variants.riscv_like.bench:
+  bench_cycles, instret, cpi and static_code_bytes. The static instruction
+  count (16) is the same because the source is the same; static_code_bytes
+  differs because of the encodings (Thumb-2 16-bit forms vs 32-bit with some
+  compressed forms). instret differs because RISC-V has compare-and-branch
+  instructions (cmp+bne becomes one bne) while base RV32IMC without Zcmp
+  needs five stores for push {r4-r7, lr}. CPI is
+  cycles divided by instret and so moves in the opposite direction to
+  instret. The "bench" CLI command prints this as a table.
+likely_root_causes:
+  - "A real ARM vs RISC-V difference in code size usually comes from Thumb-2's dense 16-bit encodings and load/store multiple; RISC-V narrows it with the C extension, and on Hazard3 with Zcmp (cm.push/cm.popret) when the compiler uses it."
+  - "A difference in instruction count comes from ISA features: compare-and-branch instructions and no condition flags on RISC-V, multi-register push/pop on ARM (base RV32IMC has no store-multiple)."
+  - "A CPI difference on the real board also includes pipeline depth, branch prediction and memory latency, which this model does not have."
+how_to_debug:
+  - "On the board: build the same C source for both cores with -O2 and compare 'size' output (text bytes) and the objdump instruction counts."
+  - "Read DWT CYCCNT on the Cortex-M33 and mcycle/minstret on Hazard3 around the same loop; compute CPI = cycles / instructions for each."
+  - "Vary the benchmark (load/store heavy vs branch heavy) and explain each change in terms of an ISA feature, not a guess."
+  - "Subtract the counter read overhead on each core before comparing."
+what_this_means: >
+  Instructions, cycles and bytes are three different measures and an ISA
+  can win one while losing another. Cycles per instruction is the bridge
+  between them; comparing only wall time hides which architectural feature
+  made the difference. This simulation shows the shape of the comparison;
+  the real board gives the numbers.
+hidden_symptom: "The RISC-V build is larger and retires fewer instructions for the same C code."

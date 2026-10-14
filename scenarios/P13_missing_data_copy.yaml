@@ -1,0 +1,52 @@
+id: P13
+title: Boot fault - startup code forgets to copy .data from flash
+layer: "2 Boot"
+description: >
+  The same program as P01, but the reset handler skips the .data copy loop.
+  The initial value of the global "greeting_len" (7) sits in flash at
+  __data_load, but nothing copies it to its run-time address in SRAM, so the
+  program reads whatever SRAM held at power-on. .bss is still zeroed, so the
+  uninitialised counter is correct. Nothing faults; one number is simply
+  wrong. Compare with P02, the mirror-image bug.
+program: blink
+options: {}
+faults:
+  - {type: missing_data_copy}
+config:
+  seed: 1
+  max_cycles: 50000
+expected:
+  summary: Boot reaches main without faults; the data_copied step reports a mismatch; "counter=1" is correct but "greeting_len=" is not 7.
+  checks:
+    - {check: boot_step, step: data_copied, ok: false}
+    - {check: boot_step, step: bss_zeroed, ok: true}
+    - {check: no_faults}
+    - {check: uart_contains, text: "counter=1"}
+    - {check: uart_not_contains, text: "greeting_len=7"}
+    - {check: global_ne, name: greeting_len, value: 7}
+what_to_look_for: >
+  The data_copied boot step says the check FAILED and prints the mismatch,
+  for example "greeting_len: SRAM=0x5D6E... expected 0x00000007". The
+  bss_zeroed step passes. The UART shows "boot ok" and "counter=1" (from
+  .bss, correct) but "greeting_len=" followed by a large random number.
+  image_map shows the two addresses involved: data_load (the flash copy of
+  the initial values, 0x100001xx) and data.greeting_len (0x20000000, its
+  run-time home). Run "r2s disasm blink" to see both in the map and the
+  copy loop that is missing here.
+likely_root_causes:
+  - "The reset handler has no .data copy loop, or it copies from the wrong source symbol (the run-time address instead of the load address)."
+  - "The linker script does not give .data separate load (AT> FLASH) and run (> RAM) addresses, so __data_load is wrong."
+  - "The loop bounds use __data_start/__data_end from a different section, or are not word aligned, so the last globals are skipped."
+  - "The variable is const and was expected in flash, but a cast or a missing const put it in .data."
+how_to_debug:
+  - "Before main runs, compare the two copies in GDB: 'x/4wx &__data_load' (flash) and 'x/4wx &__data_start' (SRAM). They must be equal after the copy loop."
+  - "'arm-none-eabi-objdump -h' shows .data with different VMA (0x2000xxxx) and LMA (0x100xxxxx); if they are equal, the linker script is missing AT> FLASH."
+  - "Set a watchpoint on the global ('watch greeting_len') and reset: if it never changes before main, the copy never ran."
+  - "Power-cycle the board: a value that changes between power cycles is power-on SRAM garbage, not a logic bug."
+what_this_means: >
+  An initialised global has two addresses: where its initial value is stored
+  (flash, the load address) and where the program uses it (SRAM, the run
+  address). Hardware never copies one to the other; the startup code does.
+  P02 and P13 are the two halves of the same lesson: C's promises about
+  globals are kept by the code that runs before main.
+hidden_symptom: "'boot ok' and 'counter=1' print correctly, but a configuration value that was initialised in the source reads as a random number."

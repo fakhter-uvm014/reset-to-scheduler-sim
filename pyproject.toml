@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reset-to-scheduler-sim"
+version = "1.0.0"
+description = "Behavioral model for learning and demonstration: a Pico 2 (RP2350, Cortex-M33) style microcontroller from power-on reset to a preemptive kernel, with traces, fault decoding and a browser viewer."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Farzana Akhter" }]
+requires-python = ">=3.10"
+dependencies = ["pyyaml>=6"]
+keywords = ["cortex-m", "armv8-m", "rp2350", "embedded", "education", "simulator", "rtos", "exceptions"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Education",
+    "Topic :: Education",
+    "Topic :: System :: Hardware",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-html>=3"]
+
+[project.scripts]
+r2s = "r2s.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/fakhter-uvm014/reset-to-scheduler-sim"
+Viewer = "https://fakhter-uvm014.github.io/reset-to-scheduler-sim/"
+Guide = "https://github.com/fakhter-uvm014/reset-to-scheduler-sim/tree/main/docs/guide"
+
+[tool.setuptools]
+packages = ["r2s"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: runs every scenario through the CLI (a few seconds)"]

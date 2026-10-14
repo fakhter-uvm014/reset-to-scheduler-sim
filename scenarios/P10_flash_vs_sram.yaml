@@ -1,0 +1,60 @@
+id: P10
+title: Flash vs SRAM - the same loop timed with the cycle counter, with and without the XIP cache
+layer: "Experiments"
+description: >
+  A 16-instruction checksum loop runs 200 iterations. main first reads DWT
+  CYCCNT twice back to back to measure what a measurement costs, then reads
+  it before and after the call and prints both numbers. Three variants place
+  the loop in flash (through the XIP cache), in flash with the cache disabled
+  (every fetch pays the miss penalty), and in SRAM. The data table is always
+  in SRAM, so only instruction fetches move between regions.
+program: bench
+options:
+  iterations: 200
+config:
+  seed: 1
+  max_cycles: 400000
+variants:
+  - name: flash_cached
+    options: {code_region: flash}
+    config: {xip_cache_enabled: true}
+  - name: flash_uncached
+    options: {code_region: flash}
+    config: {xip_cache_enabled: false}
+  - name: sram
+    options: {code_region: sram}
+expected:
+  summary: sram is fastest, flash_cached is within a few percent of it (only cold misses), flash_uncached is several times slower; the instruction count is identical in all three.
+  checks:
+    - {check: no_faults, variant: sram}
+    - {check: uart_contains, variant: sram, text: "bench cycles="}
+    - {check: variant_lt, metric: bench.bench_cycles, a: sram, b: flash_cached}
+    - {check: variant_lt, metric: bench.bench_cycles, a: flash_cached, b: flash_uncached}
+    - {check: variant_gt, metric: bench.xip_misses, a: flash_uncached, b: flash_cached}
+what_to_look_for: >
+  summary.variants.<name>.bench: bench_cycles printed by the program and
+  xip_hits/xip_misses. flash_cached has a handful of misses (the loop fits in
+  a few cache lines; the first pass misses, the other 199 hit), so its
+  bench_cycles is only slightly above sram. flash_uncached has a miss per
+  fetch and bench_cycles several times higher. instret and
+  static_code_bytes are identical in all three: the program is the same, only
+  where the fetch comes from changes. The UART lines "bench cycles=" and
+  "overhead=" are what the student prints on the board; bench_cycles_corrected
+  subtracts the overhead (3 cycles here: one load from the PPB).
+likely_root_causes:
+  - "Code in flash running slower than expected: the loop is larger than the XIP cache, or the cache was disabled, or the flash clock divider is high."
+  - "SRAM copy not faster than flash: the loop already fits in the cache, so the difference is only the cold misses; or the function was not really placed in SRAM (check the map file)."
+  - "Timing noise: an interrupt fired during the measurement; measure with interrupts off or repeat and take the minimum."
+how_to_debug:
+  - "Use objdump or the map file to confirm the function's address: 0x10xxxxxx is flash, 0x20xxxxxx is SRAM (use __attribute__((section(\".ram_code\"))) or the linker script)."
+  - "Read DWT CYCCNT before and after; measure an empty call first and subtract that overhead."
+  - "Disable the XIP cache (RP2350 XIP_CTRL) and repeat: the slowdown is the cache's contribution."
+  - "Vary the loop size until it exceeds the cache; the flash number jumps while the SRAM number stays linear."
+what_this_means: >
+  Instruction fetch cost depends on where the code lives and whether a cache
+  is hiding the slow memory. A small hot loop is almost free from flash
+  because the cache hits after the first pass; a large or scattered program
+  is not. Cycle counts, not milliseconds, make this visible, and the same
+  instruction count with different cycle counts is the definition of a
+  memory-hierarchy effect.
+hidden_symptom: "The same function runs faster when moved to RAM, but only a little, unless the cache is off."

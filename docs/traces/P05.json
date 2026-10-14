@@ -1,0 +1,1659 @@
+{
+  "scenario": {
+    "id": "P05",
+    "title": "Two interrupts - priority inversion vs fixed priorities, tail-chaining",
+    "layer": "4 Exceptions",
+    "description": "A slow timer interrupt (IRQ_TIMER0, 200 loop iterations of work) and an urgent button interrupt (IRQ_GPIO). The button is pressed while the timer handler is running. In the \"inversion\" variant both share priority 0x80, so the button must wait for the whole timer handler and is then tail-chained. In the \"fixed\" variant the button gets priority 0x40 (more urgent), pre-empts the timer handler in the middle, and returns into it.\n",
+    "program": "priority",
+    "options": {
+      "alarm_us": 20,
+      "timer_work": 200
+    },
+    "config": {
+      "seed": 1,
+      "max_cycles": 40000
+    },
+    "stimuli": [
+      {
+        "action": "button_press",
+        "at_us": 21
+      },
+      {
+        "action": "halt",
+        "at_us": 120,
+        "reason": "end of test window"
+      }
+    ],
+    "variants": [
+      {
+        "name": "inversion",
+        "options": {
+          "timer_priority": 128,
+          "button_priority": 128
+        }
+      },
+      {
+        "name": "fixed",
+        "options": {
+          "timer_priority": 128,
+          "button_priority": 64
+        }
+      }
+    ],
+    "expected": {
+      "summary": "With equal priorities the button waits ~500 cycles and is tail-chained after the timer; with a higher priority it is taken in ~12 cycles by pre-empting the timer handler.",
+      "checks": [
+        {
+          "check": "no_faults",
+          "variant": "inversion"
+        },
+        {
+          "check": "no_faults",
+          "variant": "fixed"
+        },
+        {
+          "check": "tail_chains_min",
+          "variant": "inversion",
+          "count": 1
+        },
+        {
+          "check": "priority_preempted",
+          "variant": "inversion",
+          "value": false
+        },
+        {
+          "check": "priority_preempted",
+          "variant": "fixed",
+          "value": true
+        },
+        {
+          "check": "variant_lt",
+          "metric": "priority.button_latency",
+          "a": "fixed",
+          "b": "inversion"
+        }
+      ]
+    },
+    "what_to_look_for": "Inversion variant: exception_entry for IRQ_TIMER0, then the button irq_pend while \"ISR:IRQ_TIMER0\" is the context, then no entry until the timer handler's \"exception_return ... tail-chain\" event, followed by a tail_chain event for IRQ_GPIO. summary.variants.inversion.priority.button_latency is several hundred cycles and tail_chains is 1. Fixed variant: exception_entry for IRQ_GPIO with from=\"ISR:IRQ_TIMER0\" (pre-emption), the marker pin toggles, exception_return back to \"ISR:IRQ_TIMER0\", and the timer handler finishes afterwards. button_latency is 12 cycles, the GPIO entry event shows LR=EXC_RETURN 0xFFFFFFF1 (\"return to handler mode\") and its stacked frame holds the timer handler's registers, with the stacked PC inside Timer_Handler's loop. The priorities are byte-packed: IRQ_TIMER0 is byte 0 of NVIC_IPR0, IRQ_GPIO (IRQ 21) is byte 1 of NVIC_IPR5.\n",
+    "likely_root_causes": [
+      "All interrupts left at the default priority 0 (or all the same), so nothing can pre-empt anything.",
+      "Priorities written to the wrong NVIC_IPR byte (they are byte-packed on the real chip) or written with the wrong shift for the implemented bits.",
+      "A long handler doing work that belongs in the main loop or a task.",
+      "Priority grouping (AIRCR.PRIGROUP) set so that the intended pre-emption bits are sub-priority bits."
+    ],
+    "how_to_debug": [
+      "Read back NVIC->IPR for both IRQs in GDB and check the upper bits actually differ.",
+      "Put a marker pin in each handler (set on entry, clear on exit) and look at both on the scope: nested pulses mean pre-emption, back-to-back pulses mean tail-chaining.",
+      "Set a breakpoint in the button handler and inspect the stacked frame: if the stacked PC is inside the timer handler, the pre-emption worked.",
+      "Shorten the slow handler and move its work to the main loop; the long tail disappears regardless of priorities."
+    ],
+    "what_this_means": "Only a numerically lower priority can pre-empt a running handler. An interrupt of equal priority cannot pre-empt: it stays pending until the running handler returns, and when several are pending at the same priority the one with the lowest exception number is taken first (not the one that arrived first). The NVIC then saves the unstack/restack by tail-chaining it. A priority scheme is the only way to bound the latency of the urgent interrupt, and the stacked frame of the pre-empting handler is the proof that the processor stopped in the middle of another handler.\n",
+    "hidden_symptom": "Button response time depends on whether the timer handler happens to be running."
+  },
+  "config": {
+    "seed": 1,
+    "cpu_hz": 150000000,
+    "profile": "arm_like",
+    "max_cycles": 40000,
+    "xip_cache_enabled": true,
+    "xip_miss_penalty": 20
+  },
+  "options": {
+    "alarm_us": 20,
+    "timer_work": 200,
+    "timer_priority": 128,
+    "button_priority": 128
+  },
+  "image_map": {
+    "vector_base": "0x10000000",
+    "initial_sp": "0x20082000",
+    "vectors": [
+      {
+        "index": 0,
+        "name": "initial MSP",
+        "value": "0x20082000"
+      },
+      {
+        "index": 1,
+        "name": "Reset",
+        "value": "0x10000101"
+      },
+      {
+        "index": 2,
+        "name": "NMI",
+        "value": "0x10000161"
+      },
+      {
+        "index": 3,
+        "name": "HardFault",
+        "value": "0x10000161"
+      },
+      {
+        "index": 4,
+        "name": "MemManage",
+        "value": "0x10000161"
+      },
+      {
+        "index": 5,
+        "name": "BusFault",
+        "value": "0x10000161"
+      },
+      {
+        "index": 6,
+        "name": "UsageFault",
+        "value": "0x10000161"
+      },
+      {
+        "index": 11,
+        "name": "SVCall",
+        "value": "0x10000161"
+      },
+      {
+        "index": 12,
+        "name": "DebugMonitor",
+        "value": "0x10000161"
+      },
+      {
+        "index": 14,
+        "name": "PendSV",
+        "value": "0x10000161"
+      },
+      {
+        "index": 15,
+        "name": "SysTick",
+        "value": "0x10000161"
+      },
+      {
+        "index": 16,
+        "name": "IRQ_TIMER0",
+        "value": "0x100001A1"
+      },
+      {
+        "index": 17,
+        "name": "IRQ1",
+        "value": "0x10000161"
+      },
+      {
+        "index": 18,
+        "name": "IRQ2",
+        "value": "0x10000161"
+      },
+      {
+        "index": 19,
+        "name": "IRQ3",
+        "value": "0x10000161"
+      },
+      {
+        "index": 20,
+        "name": "IRQ4",
+        "value": "0x10000161"
+      },
+      {
+        "index": 21,
+        "name": "IRQ5",
+        "value": "0x10000161"
+      },
+      {
+        "index": 22,
+        "name": "IRQ6",
+        "value": "0x10000161"
+      },
+      {
+        "index": 23,
+        "name": "IRQ7",
+        "value": "0x10000161"
+      }
+    ],
+    "sections": [
+      {
+        "name": "startup",
+        "region": "flash",
+        "base": "0x10000100",
+        "words": 24
+      },
+      {
+        "name": "default_handler",
+        "region": "flash",
+        "base": "0x10000160",
+        "words": 2
+      },
+      {
+        "name": "main",
+        "region": "flash",
+        "base": "0x10000168",
+        "words": 29
+      }
+    ],
+    "data": {},
+    "bss": {},
+    "reserved": {},
+    "data_load": "0x100001DC"
+  },
+  "events": [
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P05 variant inversion: Two interrupts - priority inversion vs fixed priorities, tail-chaining",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P05",
+        "variant": "inversion",
+        "faults": [],
+        "options": {
+          "alarm_us": 20,
+          "timer_work": 200,
+          "timer_priority": 128,
+          "button_priority": 128
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main"
+        ],
+        "data_words": 0,
+        "bss_words": 0,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": [],
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 29,
+      "t_us": 0.193,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 0 word(s) copied from flash 0x100001DC to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x100001DC",
+        "r1": "0x20000000",
+        "r2": "0x20000000",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": [],
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 77,
+      "t_us": 0.513,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss zeroed: 0 word(s) at 0x20000000..0x20000000 are 0",
+      "regs": {
+        "r0": "0x00000000",
+        "pc": "0x10000154"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": true,
+        "nonzero": [],
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 77,
+      "t_us": 0.513,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 77 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000158"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 142,
+      "t_us": 0.947,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'priority test'",
+      "regs": {
+        "r0": "0x40054010",
+        "r1": "0x00000014",
+        "lr": "0x1000015D",
+        "pc": "0x10000198"
+      },
+      "details": {
+        "text": "priority test",
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 198,
+      "t_us": 1.32,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 2850 cycles until the next event",
+      "regs": {
+        "pc": "0x1000019C"
+      },
+      "details": {
+        "skip_cycles": 2850,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 3049,
+      "t_us": 20.327,
+      "unit": "timer",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "IRQ_TIMER0",
+      "ctx": "main",
+      "reason": "TIMER ALARM0 reached 20 us",
+      "regs": {},
+      "details": {
+        "exception": 16,
+        "priority": 128,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 3061,
+      "t_us": 20.407,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:IRQ_TIMER0",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "IRQ_TIMER0 taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[16]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001A0",
+        "xpsr": "0x61000010"
+      },
+      "details": {
+        "exception": 16,
+        "name": "IRQ_TIMER0",
+        "handler": "0x100001A0",
+        "vector": "0x100001A1",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 128,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x40054010",
+          "r1": "0x00000014",
+          "r2": "0x20000000",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x1000019C",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x100001A0",
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 3061,
+      "t_us": 20.407,
+      "unit": "cpu",
+      "kind": "marker",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "marker: timer handler start",
+      "regs": {
+        "pc": "0x100001A4"
+      },
+      "details": {
+        "text": "timer handler start",
+        "pc": "0x100001A4",
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 12,
+      "t_cycles": 3150,
+      "t_us": 21.0,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "button on pin 14 pressed (edge at cycle 3150)",
+      "regs": {
+        "r0": "0x40054034",
+        "r1": "0x00000001",
+        "r2": "0x000000B3",
+        "pc": "0x100001B8",
+        "xpsr": "0x21000010"
+      },
+      "details": {
+        "pin": 14,
+        "level": 1,
+        "stimulus": true,
+        "nominal": 3150,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 13,
+      "t_cycles": 3150,
+      "t_us": 21.0,
+      "unit": "gpio",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "IRQ_GPIO",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "GPIO edge on pin 14",
+      "regs": {},
+      "details": {
+        "exception": 37,
+        "priority": 128,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 14,
+      "t_cycles": 3688,
+      "t_us": 24.587,
+      "unit": "cpu",
+      "kind": "marker",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "marker: timer handler end",
+      "regs": {
+        "r2": "0x00000000",
+        "pc": "0x100001C0",
+        "xpsr": "0x61000010"
+      },
+      "details": {
+        "text": "timer handler end",
+        "pc": "0x100001C0",
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 15,
+      "t_cycles": 3690,
+      "t_us": 24.6,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:IRQ_TIMER0",
+      "to": "ISR:IRQ_GPIO",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "IRQ_TIMER0 returning, but IRQ_GPIO is pending and may pre-empt the context underneath: tail-chain (no unstack/restack)",
+      "regs": {
+        "pc": "0x100001C4"
+      },
+      "details": {
+        "exception": 16,
+        "exc_return": "0xFFFFFFF9",
+        "tail_chain_to": 37,
+        "pc": "0x100001C4",
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 16,
+      "t_cycles": 3696,
+      "t_us": 24.64,
+      "unit": "cpu",
+      "kind": "tail_chain",
+      "from": "ISR:IRQ_TIMER0",
+      "to": "ISR:IRQ_GPIO",
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "IRQ_GPIO tail-chained: the frame underneath stays on the stack, no pop/push; LR=0xFFFFFFF9 again",
+      "regs": {
+        "xpsr": "0x61000025"
+      },
+      "details": {
+        "exception": 37,
+        "name": "IRQ_GPIO",
+        "handler": "0x100001C4",
+        "vector": "0x100001C5",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 128,
+        "stack": "msp",
+        "pc": "0x100001C4",
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 17,
+      "t_cycles": 3696,
+      "t_us": 24.64,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "MARKER pin 16 -> 1",
+      "regs": {
+        "pc": "0x100001C8"
+      },
+      "details": {
+        "pin": 16,
+        "level": 1,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 18,
+      "t_cycles": 3707,
+      "t_us": 24.713,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "1",
+      "to": "0",
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "MARKER pin 16 -> 0",
+      "regs": {
+        "r0": "0x40000010",
+        "r1": "0x00004000",
+        "pc": "0x100001D8"
+      },
+      "details": {
+        "pin": 16,
+        "level": 0,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 19,
+      "t_cycles": 3723,
+      "t_us": 24.82,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:IRQ_GPIO",
+      "to": "main",
+      "ctx": "main",
+      "reason": "IRQ_GPIO returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "r0": "0x40054010",
+        "r1": "0x00000014",
+        "r2": "0x20000000",
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x1000019C",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "exception": 37,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x40054010",
+          "r1": "0x00000014",
+          "r2": "0x20000000",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x1000019C",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x1000019C",
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 20,
+      "t_cycles": 3725,
+      "t_us": 24.833,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 14275 cycles until the next event",
+      "regs": {},
+      "details": {
+        "skip_cycles": 14275,
+        "variant": "inversion"
+      }
+    },
+    {
+      "seq": 0,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "scenario",
+      "kind": "scenario",
+      "from": null,
+      "to": null,
+      "ctx": "thread",
+      "reason": "scenario P05 variant fixed: Two interrupts - priority inversion vs fixed priorities, tail-chaining",
+      "regs": {
+        "r0": "0x00000000",
+        "r1": "0x00000000",
+        "r2": "0x00000000",
+        "r3": "0x00000000",
+        "r4": "0x00000000",
+        "r5": "0x00000000",
+        "r6": "0x00000000",
+        "r7": "0x00000000",
+        "r8": "0x00000000",
+        "r9": "0x00000000",
+        "r10": "0x00000000",
+        "r11": "0x00000000",
+        "r12": "0x00000000",
+        "msp": "0x00000000",
+        "psp": "0x00000000",
+        "lr": "0x00000000",
+        "pc": "0x00000000",
+        "xpsr": "0x01000000",
+        "control": 0,
+        "primask": 0
+      },
+      "details": {
+        "scenario": "P05",
+        "variant": "fixed",
+        "faults": [],
+        "options": {
+          "alarm_us": 20,
+          "timer_work": 200,
+          "timer_priority": 128,
+          "button_priority": 64
+        }
+      }
+    },
+    {
+      "seq": 1,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "power_on",
+      "ctx": "boot",
+      "reason": "power-on: SRAM contents are undefined (model: seeded pseudo-random words); flash holds the image; nothing has run yet",
+      "regs": {},
+      "details": {
+        "step": "power_on",
+        "ok": true,
+        "image_sections": [
+          "startup",
+          "default_handler",
+          "main"
+        ],
+        "data_words": 0,
+        "bss_words": 0,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 2,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "vector_table",
+      "ctx": "boot",
+      "reason": "core reads vector table at 0x10000000: word0 -> MSP=0x20082000, word1 -> 0x10000101 -> PC=0x10000100, xPSR.T=1",
+      "regs": {},
+      "details": {
+        "step": "vector_table",
+        "ok": true,
+        "vector_base": 268435456,
+        "initial_sp": 537403392,
+        "reset_vector": 268435713,
+        "problems": [],
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 3,
+      "t_cycles": 0,
+      "t_us": 0.0,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "reset_handler",
+      "ctx": "boot",
+      "reason": "Reset_Handler entered at PC=0x10000100, MSP=0x20082000, privileged thread mode",
+      "regs": {
+        "msp": "0x20082000",
+        "lr": "0xFFFFFFFF",
+        "pc": "0x10000104"
+      },
+      "details": {
+        "step": "reset_handler",
+        "ok": true,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 4,
+      "t_cycles": 29,
+      "t_us": 0.193,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "data_copied",
+      "ctx": "boot",
+      "reason": ".data copy done: 0 word(s) copied from flash 0x100001DC to SRAM 0x20000000",
+      "regs": {
+        "r0": "0x100001DC",
+        "r1": "0x20000000",
+        "r2": "0x20000000",
+        "pc": "0x10000130",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "step": "data_copied",
+        "ok": true,
+        "mismatches": [],
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 5,
+      "t_cycles": 77,
+      "t_us": 0.513,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "bss_zeroed",
+      "ctx": "boot",
+      "reason": ".bss zeroed: 0 word(s) at 0x20000000..0x20000000 are 0",
+      "regs": {
+        "r0": "0x00000000",
+        "pc": "0x10000154"
+      },
+      "details": {
+        "step": "bss_zeroed",
+        "ok": true,
+        "nonzero": [],
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 6,
+      "t_cycles": 77,
+      "t_us": 0.513,
+      "unit": "boot",
+      "kind": "boot_step",
+      "from": null,
+      "to": "main_entered",
+      "ctx": "boot",
+      "reason": "bl main: C entry point reached after 77 cycles, MSP=0x20082000",
+      "regs": {
+        "pc": "0x10000158"
+      },
+      "details": {
+        "step": "main_entered",
+        "ok": true,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 7,
+      "t_cycles": 142,
+      "t_us": 0.947,
+      "unit": "uart",
+      "kind": "uart_tx",
+      "from": null,
+      "to": null,
+      "ctx": "main",
+      "reason": "UART line: 'priority test'",
+      "regs": {
+        "r0": "0x40054010",
+        "r1": "0x00000014",
+        "lr": "0x1000015D",
+        "pc": "0x10000198"
+      },
+      "details": {
+        "text": "priority test",
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 8,
+      "t_cycles": 198,
+      "t_us": 1.32,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 2850 cycles until the next event",
+      "regs": {
+        "pc": "0x1000019C"
+      },
+      "details": {
+        "skip_cycles": 2850,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 9,
+      "t_cycles": 3049,
+      "t_us": 20.327,
+      "unit": "timer",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "IRQ_TIMER0",
+      "ctx": "main",
+      "reason": "TIMER ALARM0 reached 20 us",
+      "regs": {},
+      "details": {
+        "exception": 16,
+        "priority": 128,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 10,
+      "t_cycles": 3061,
+      "t_us": 20.407,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "main",
+      "to": "ISR:IRQ_TIMER0",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "IRQ_TIMER0 taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF9, PC=vector[16]",
+      "regs": {
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001A0",
+        "xpsr": "0x61000010"
+      },
+      "details": {
+        "exception": 16,
+        "name": "IRQ_TIMER0",
+        "handler": "0x100001A0",
+        "vector": "0x100001A1",
+        "exc_return": "0xFFFFFFF9",
+        "priority": 128,
+        "stack": "msp",
+        "frame_at": "0x20081FE0",
+        "stacked_frame": {
+          "r0": "0x40054010",
+          "r1": "0x00000014",
+          "r2": "0x20000000",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x1000019C",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x100001A0",
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 11,
+      "t_cycles": 3061,
+      "t_us": 20.407,
+      "unit": "cpu",
+      "kind": "marker",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "marker: timer handler start",
+      "regs": {
+        "pc": "0x100001A4"
+      },
+      "details": {
+        "text": "timer handler start",
+        "pc": "0x100001A4",
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 12,
+      "t_cycles": 3150,
+      "t_us": 21.0,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "button on pin 14 pressed (edge at cycle 3150)",
+      "regs": {
+        "r0": "0x40054034",
+        "r1": "0x00000001",
+        "r2": "0x000000B3",
+        "pc": "0x100001B8",
+        "xpsr": "0x21000010"
+      },
+      "details": {
+        "pin": 14,
+        "level": 1,
+        "stimulus": true,
+        "nominal": 3150,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 13,
+      "t_cycles": 3150,
+      "t_us": 21.0,
+      "unit": "gpio",
+      "kind": "irq_pend",
+      "from": null,
+      "to": "IRQ_GPIO",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "GPIO edge on pin 14",
+      "regs": {},
+      "details": {
+        "exception": 37,
+        "priority": 64,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 14,
+      "t_cycles": 3162,
+      "t_us": 21.08,
+      "unit": "cpu",
+      "kind": "exception_entry",
+      "from": "ISR:IRQ_TIMER0",
+      "to": "ISR:IRQ_GPIO",
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "IRQ_GPIO taken: hardware pushed r0-r3, r12, lr, pc, xPSR on msp, LR=EXC_RETURN 0xFFFFFFF1, PC=vector[37]",
+      "regs": {
+        "msp": "0x20081FC0",
+        "lr": "0xFFFFFFF1",
+        "pc": "0x100001C4",
+        "xpsr": "0x21000025"
+      },
+      "details": {
+        "exception": 37,
+        "name": "IRQ_GPIO",
+        "handler": "0x100001C4",
+        "vector": "0x100001C5",
+        "exc_return": "0xFFFFFFF1",
+        "priority": 64,
+        "stack": "msp",
+        "frame_at": "0x20081FC0",
+        "stacked_frame": {
+          "r0": "0x40054034",
+          "r1": "0x00000001",
+          "r2": "0x000000B3",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0xFFFFFFF9",
+          "pc": "0x100001B8",
+          "xpsr": "0x21000010"
+        },
+        "pc": "0x100001C4",
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 15,
+      "t_cycles": 3162,
+      "t_us": 21.08,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "0",
+      "to": "1",
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "MARKER pin 16 -> 1",
+      "regs": {
+        "pc": "0x100001C8"
+      },
+      "details": {
+        "pin": 16,
+        "level": 1,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 16,
+      "t_cycles": 3193,
+      "t_us": 21.287,
+      "unit": "gpio",
+      "kind": "gpio",
+      "from": "1",
+      "to": "0",
+      "ctx": "ISR:IRQ_GPIO",
+      "reason": "MARKER pin 16 -> 0",
+      "regs": {
+        "r0": "0x40000010",
+        "r1": "0x00004000",
+        "pc": "0x100001D8"
+      },
+      "details": {
+        "pin": 16,
+        "level": 0,
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 17,
+      "t_cycles": 3209,
+      "t_us": 21.393,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:IRQ_GPIO",
+      "to": "ISR:IRQ_TIMER0",
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "IRQ_GPIO returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to handler mode (privileged)",
+      "regs": {
+        "r0": "0x40054034",
+        "r1": "0x00000001",
+        "msp": "0x20081FE0",
+        "lr": "0xFFFFFFF9",
+        "pc": "0x100001B8",
+        "xpsr": "0x21000010"
+      },
+      "details": {
+        "exception": 37,
+        "exc_return": "0xFFFFFFF1",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x40054034",
+          "r1": "0x00000001",
+          "r2": "0x000000B3",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0xFFFFFFF9",
+          "pc": "0x100001B8",
+          "xpsr": "0x21000010"
+        },
+        "pc": "0x100001B8",
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 18,
+      "t_cycles": 3747,
+      "t_us": 24.98,
+      "unit": "cpu",
+      "kind": "marker",
+      "from": null,
+      "to": null,
+      "ctx": "ISR:IRQ_TIMER0",
+      "reason": "marker: timer handler end",
+      "regs": {
+        "r2": "0x00000000",
+        "pc": "0x100001C0",
+        "xpsr": "0x61000010"
+      },
+      "details": {
+        "text": "timer handler end",
+        "pc": "0x100001C0",
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 19,
+      "t_cycles": 3759,
+      "t_us": 25.06,
+      "unit": "cpu",
+      "kind": "exception_return",
+      "from": "ISR:IRQ_TIMER0",
+      "to": "main",
+      "ctx": "main",
+      "reason": "IRQ_TIMER0 returned: popped r0-r3, r12, lr, pc, xPSR from msp, back to thread mode (privileged)",
+      "regs": {
+        "r0": "0x40054010",
+        "r1": "0x00000014",
+        "r2": "0x20000000",
+        "msp": "0x20082000",
+        "lr": "0x1000015D",
+        "pc": "0x1000019C",
+        "xpsr": "0x61000000"
+      },
+      "details": {
+        "exception": 16,
+        "exc_return": "0xFFFFFFF9",
+        "stack": "msp",
+        "popped_frame": {
+          "r0": "0x40054010",
+          "r1": "0x00000014",
+          "r2": "0x20000000",
+          "r3": "0x00000000",
+          "r12": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x1000019C",
+          "xpsr": "0x61000000"
+        },
+        "pc": "0x1000019C",
+        "variant": "fixed"
+      }
+    },
+    {
+      "seq": 20,
+      "t_cycles": 3761,
+      "t_us": 25.073,
+      "unit": "cpu",
+      "kind": "sleep",
+      "from": "main",
+      "to": "sleep",
+      "ctx": "main",
+      "reason": "wfi: core sleeps 14239 cycles until the next event",
+      "regs": {},
+      "details": {
+        "skip_cycles": 14239,
+        "variant": "fixed"
+      }
+    }
+  ],
+  "summary": {
+    "variants": {
+      "inversion": {
+        "variant": "inversion",
+        "profile": "arm_like",
+        "stop_reason": "end of test window",
+        "halted": true,
+        "lockup": false,
+        "cycles": 18001,
+        "time_us": 120.007,
+        "instructions_executed": 443,
+        "instret": 450,
+        "cpi": 40.002,
+        "exception_entries": 2,
+        "tail_chains": 1,
+        "wfi_sleeps": 2,
+        "critical_sections": {
+          "count": 0,
+          "longest_cycles": 0
+        },
+        "ignored_privileged_ops": 0,
+        "fault_registers": {
+          "CFSR": "0x00000000",
+          "HFSR": "0x00000000",
+          "MMFAR": "0x00000000",
+          "BFAR": "0x00000000"
+        },
+        "boot_steps": [
+          {
+            "step": "power_on",
+            "ok": true,
+            "t_cycles": 0,
+            "image_sections": [
+              "startup",
+              "default_handler",
+              "main"
+            ],
+            "data_words": 0,
+            "bss_words": 0
+          },
+          {
+            "step": "vector_table",
+            "ok": true,
+            "t_cycles": 0,
+            "vector_base": 268435456,
+            "initial_sp": 537403392,
+            "reset_vector": 268435713,
+            "problems": []
+          },
+          {
+            "step": "reset_handler",
+            "ok": true,
+            "t_cycles": 0
+          },
+          {
+            "step": "data_copied",
+            "ok": true,
+            "t_cycles": 29,
+            "mismatches": []
+          },
+          {
+            "step": "bss_zeroed",
+            "ok": true,
+            "t_cycles": 77,
+            "nonzero": []
+          },
+          {
+            "step": "main_entered",
+            "ok": true,
+            "t_cycles": 77
+          }
+        ],
+        "faults": [],
+        "uart_output": "priority test\n",
+        "uart_lines": [
+          "priority test"
+        ],
+        "gpio_toggles": {
+          "16": 2
+        },
+        "xip_cache": {
+          "hits": 436,
+          "misses": 7,
+          "enabled": true
+        },
+        "memory_accesses": {
+          "FLASH": 443,
+          "SRAM": 16,
+          "PERIPH": 19,
+          "PPB": 3
+        },
+        "cycles_by_context": {
+          "ISR:IRQ_GPIO": 23,
+          "ISR:IRQ_TIMER0": 641,
+          "boot": 77,
+          "main": 17260
+        },
+        "final_registers": {
+          "r0": "0x40054010",
+          "r1": "0x00000014",
+          "r2": "0x20000000",
+          "r3": "0x00000000",
+          "r4": "0x00000000",
+          "r5": "0x00000000",
+          "r6": "0x00000000",
+          "r7": "0x00000000",
+          "r8": "0x00000000",
+          "r9": "0x00000000",
+          "r10": "0x00000000",
+          "r11": "0x00000000",
+          "r12": "0x00000000",
+          "sp": "0x20082000",
+          "msp": "0x20082000",
+          "psp": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x1000019C",
+          "xpsr": "0x61000000",
+          "control": 0,
+          "primask": 0,
+          "mode": "thread",
+          "privileged": true,
+          "sp_sel": "msp"
+        },
+        "systick_ticks": 0,
+        "globals": {},
+        "markers": [
+          "timer handler start",
+          "timer handler end"
+        ],
+        "faults_injected": [],
+        "options": {
+          "alarm_us": 20,
+          "timer_work": 200,
+          "timer_priority": 128,
+          "button_priority": 128
+        },
+        "priority": {
+          "entries": [
+            [
+              3061,
+              "IRQ_TIMER0",
+              "exception_entry"
+            ],
+            [
+              3696,
+              "IRQ_GPIO",
+              "tail_chain"
+            ]
+          ],
+          "button_latency": 546,
+          "button_preempted_timer": false,
+          "tail_chains": 1
+        },
+        "cycles_to_main": 77
+      },
+      "fixed": {
+        "variant": "fixed",
+        "profile": "arm_like",
+        "stop_reason": "end of test window",
+        "halted": true,
+        "lockup": false,
+        "cycles": 18001,
+        "time_us": 120.007,
+        "instructions_executed": 443,
+        "instret": 450,
+        "cpi": 40.002,
+        "exception_entries": 2,
+        "tail_chains": 0,
+        "wfi_sleeps": 2,
+        "critical_sections": {
+          "count": 0,
+          "longest_cycles": 0
+        },
+        "ignored_privileged_ops": 0,
+        "fault_registers": {
+          "CFSR": "0x00000000",
+          "HFSR": "0x00000000",
+          "MMFAR": "0x00000000",
+          "BFAR": "0x00000000"
+        },
+        "boot_steps": [
+          {
+            "step": "power_on",
+            "ok": true,
+            "t_cycles": 0,
+            "image_sections": [
+              "startup",
+              "default_handler",
+              "main"
+            ],
+            "data_words": 0,
+            "bss_words": 0
+          },
+          {
+            "step": "vector_table",
+            "ok": true,
+            "t_cycles": 0,
+            "vector_base": 268435456,
+            "initial_sp": 537403392,
+            "reset_vector": 268435713,
+            "problems": []
+          },
+          {
+            "step": "reset_handler",
+            "ok": true,
+            "t_cycles": 0
+          },
+          {
+            "step": "data_copied",
+            "ok": true,
+            "t_cycles": 29,
+            "mismatches": []
+          },
+          {
+            "step": "bss_zeroed",
+            "ok": true,
+            "t_cycles": 77,
+            "nonzero": []
+          },
+          {
+            "step": "main_entered",
+            "ok": true,
+            "t_cycles": 77
+          }
+        ],
+        "faults": [],
+        "uart_output": "priority test\n",
+        "uart_lines": [
+          "priority test"
+        ],
+        "gpio_toggles": {
+          "16": 2
+        },
+        "xip_cache": {
+          "hits": 436,
+          "misses": 7,
+          "enabled": true
+        },
+        "memory_accesses": {
+          "FLASH": 443,
+          "SRAM": 32,
+          "PERIPH": 19,
+          "PPB": 3
+        },
+        "cycles_by_context": {
+          "ISR:IRQ_GPIO": 49,
+          "ISR:IRQ_TIMER0": 651,
+          "boot": 77,
+          "main": 17224
+        },
+        "final_registers": {
+          "r0": "0x40054010",
+          "r1": "0x00000014",
+          "r2": "0x20000000",
+          "r3": "0x00000000",
+          "r4": "0x00000000",
+          "r5": "0x00000000",
+          "r6": "0x00000000",
+          "r7": "0x00000000",
+          "r8": "0x00000000",
+          "r9": "0x00000000",
+          "r10": "0x00000000",
+          "r11": "0x00000000",
+          "r12": "0x00000000",
+          "sp": "0x20082000",
+          "msp": "0x20082000",
+          "psp": "0x00000000",
+          "lr": "0x1000015D",
+          "pc": "0x1000019C",
+          "xpsr": "0x61000000",
+          "control": 0,
+          "primask": 0,
+          "mode": "thread",
+          "privileged": true,
+          "sp_sel": "msp"
+        },
+        "systick_ticks": 0,
+        "globals": {},
+        "markers": [
+          "timer handler start",
+          "timer handler end"
+        ],
+        "faults_injected": [],
+        "options": {
+          "alarm_us": 20,
+          "timer_work": 200,
+          "timer_priority": 128,
+          "button_priority": 64
+        },
+        "priority": {
+          "entries": [
+            [
+              3061,
+              "IRQ_TIMER0",
+              "exception_entry"
+            ],
+            [
+              3162,
+              "IRQ_GPIO",
+              "exception_entry"
+            ]
+          ],
+          "button_latency": 12,
+          "button_preempted_timer": true,
+          "tail_chains": 0
+        },
+        "cycles_to_main": 77
+      }
+    },
+    "stop_reason": "inversion: end of test window; fixed: end of test window",
+    "measurements": [
+      {
+        "name": "reset to main",
+        "variant": "inversion",
+        "value": 77,
+        "unit": "cycles",
+        "note": "0.51 us at 150 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": "inversion",
+        "value": 40.002,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      },
+      {
+        "name": "button IRQ wait",
+        "variant": "inversion",
+        "value": 546,
+        "unit": "cycles",
+        "note": "waited for the timer handler"
+      },
+      {
+        "name": "reset to main",
+        "variant": "fixed",
+        "value": 77,
+        "unit": "cycles",
+        "note": "0.51 us at 150 MHz"
+      },
+      {
+        "name": "CPI (whole run)",
+        "variant": "fixed",
+        "value": 40.002,
+        "unit": "cycles/instr",
+        "note": "includes exception entry/return overhead"
+      },
+      {
+        "name": "button IRQ wait",
+        "variant": "fixed",
+        "value": 12,
+        "unit": "cycles",
+        "note": "pre-empted the timer"
+      }
+    ]
+  },
+  "variants": [
+    "inversion",
+    "fixed"
+  ],
+  "result": {
+    "passed": true,
+    "checks": [
+      {
+        "name": "no_faults",
+        "passed": true,
+        "detail": "0 fault(s)",
+        "variant": "inversion",
+        "args": {}
+      },
+      {
+        "name": "no_faults",
+        "passed": true,
+        "detail": "0 fault(s)",
+        "variant": "fixed",
+        "args": {}
+      },
+      {
+        "name": "tail_chains_min",
+        "passed": true,
+        "detail": "tail_chains=1",
+        "variant": "inversion",
+        "args": {
+          "count": 1
+        }
+      },
+      {
+        "name": "priority_preempted",
+        "passed": true,
+        "detail": "button_preempted_timer=False",
+        "variant": "inversion",
+        "args": {
+          "value": false
+        }
+      },
+      {
+        "name": "priority_preempted",
+        "passed": true,
+        "detail": "button_preempted_timer=True",
+        "variant": "fixed",
+        "args": {
+          "value": true
+        }
+      },
+      {
+        "name": "variant_lt",
+        "passed": true,
+        "detail": "priority.button_latency: fixed=12 inversion=546",
+        "variant": null,
+        "args": {
+          "metric": "priority.button_latency",
+          "a": "fixed",
+          "b": "inversion"
+        }
+      }
+    ]
+  }
+}

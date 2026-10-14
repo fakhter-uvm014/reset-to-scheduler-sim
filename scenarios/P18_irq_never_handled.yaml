@@ -1,0 +1,65 @@
+id: P18
+title: Button interrupt does nothing - NVIC not enabled vs no handler installed
+layer: "3 Drivers"
+description: >
+  The latency program from P04 with one button press, in two broken
+  variants. "not_enabled": main writes the priority but never sets the IRQ's
+  bit in NVIC_ISER. The GPIO block still latches the edge and the NVIC marks
+  IRQ 21 pending, but a disabled interrupt is never taken: the program runs
+  on as if nothing happened. "no_handler": the interrupt is enabled, but the
+  vector table entry for IRQ 21 still points at Default_Handler, the
+  catch-all loop: the core takes the interrupt and then spins forever.
+program: latency
+options:
+  critical_section_len: 60
+config:
+  seed: 1
+  max_cycles: 12000
+stimuli:
+  - {action: button_press, at_us: 30}
+variants:
+  - name: not_enabled
+    hidden_symptom: "Pressing the button does nothing at all; the main loop keeps running as if no edge happened."
+    faults:
+      - {type: irq_not_enabled}
+  - name: no_handler
+    hidden_symptom: "The program runs until the first button press, then freezes; no fault is reported."
+    faults:
+      - {type: missing_irq_handler}
+expected:
+  summary: not_enabled shows the IRQ pending but never taken (no exception entry, presses=0, the run ends on max_cycles); no_handler enters IRQ_GPIO at Default_Handler and stays there.
+  checks:
+    - {check: no_faults, variant: not_enabled}
+    - {check: min_events, variant: not_enabled, kind: irq_pend, to: IRQ_GPIO, count: 1}
+    - {check: no_event, variant: not_enabled, kind: exception_entry}
+    - {check: global_equals, variant: not_enabled, name: presses, value: 0}
+    - {check: stop_reason_contains, variant: not_enabled, text: "max_cycles"}
+    - {check: min_events, variant: no_handler, kind: exception_entry, to: "ISR:IRQ_GPIO", count: 1}
+    - {check: stop_reason_contains, variant: no_handler, text: "Default_Handler"}
+    - {check: global_equals, variant: no_handler, name: presses, value: 0}
+what_to_look_for: >
+  not_enabled: an irq_pend event "GPIO edge on pin 14" and then nothing: no
+  exception_entry, no marker pin, presses stays 0, and the run only ends at
+  max_cycles. On the board NVIC_ISPR0 bit 21 is 1 (pending) while NVIC_ISER0
+  bit 21 is 0 (disabled). no_handler: exception_entry IRQ_GPIO with
+  handler=Default_Handler's address (compare with image_map.vectors and the
+  symbol in "r2s disasm latency"), then a kernel event "Default_Handler
+  reached for IRQ_GPIO (IPSR=37)" and the run stops there. IPSR = 16 + 21 = 37
+  is the number to read in the debugger.
+likely_root_causes:
+  - "NVIC_EnableIRQ (or the NVIC_ISER write) missing, or written with the wrong bit/word: IRQ n is bit n % 32 of NVIC_ISER[n / 32]."
+  - "The peripheral's own interrupt enable (here the GPIO edge enable) set but not the NVIC's, or the reverse: both are needed."
+  - "Handler name misspelled (GPIO_IRQHandler vs IO_IRQ_BANK0_IRQHandler), so the weak alias to Default_Handler stays in the vector table."
+  - "Handler defined in C++ without extern \"C\", so its mangled name does not override the weak symbol."
+how_to_debug:
+  - "In GDB read NVIC_ISER0 (0xE000E100) and NVIC_ISPR0 (0xE000E200): pending but not enabled is the first variant."
+  - "When the board 'hangs', halt it and 'p/x $xpsr': the low 9 bits (IPSR) give the exception number; 37 = IRQ 21. 'info symbol $pc' shows Default_Handler."
+  - "Check the vector table entry: 'x/xw 0x10000000 + 4*37' must be your handler's address with bit 0 set."
+  - "'arm-none-eabi-nm' the ELF: if the handler symbol is missing or is a weak alias, the name does not match the startup file."
+what_this_means: >
+  An interrupt needs three things to run your code: the peripheral must
+  raise it, the NVIC must have it enabled, and the vector table must point
+  at your handler. The first variant fails the second condition silently;
+  the second variant fails the third and parks the core in a loop. Reading
+  the pending/enable bits and IPSR tells the two apart in a minute.
+hidden_symptom: "Pressing the button does nothing. In one build the program keeps running normally; in another build it freezes on the first press."
